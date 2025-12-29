@@ -578,6 +578,8 @@
 
             const [filters, setFilters] = useState({});
             const [splitParams, setSplitParams] = useState({ ticker: '', num: 2, den: 1, dateIso: '', startDateIso: '', endDateIso: '' });
+            const [graphRange, setGraphRange] = useState('ALL'); // '1M', 'YTD', 'ALL'
+
             useEffect(() => {
                 const saved = localStorage.getItem('gh_config');
                 if (saved) setGhConfig(JSON.parse(saved));
@@ -1585,29 +1587,116 @@
 
             // 1. DASHBOARD
             const renderDashboard = () => {
-                const historicalGain = Object.values(calc.reports).reduce((acc, r) => acc + (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik345 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0) + (r.askGain || 0), 0);
-                const allTimeGain = historicalGain + (calc.unrealizedStockGain || 0);
 
-                const currentYearReport = calc.reports[new Date().getFullYear().toString()] || {};
-
-                // Axis Ticks Logic
                 const series = calc.totalValueGraph || [];
+
+                // 1. FILTER DATA BASED ON RANGE
+                const getFilteredData = (dataset, isGrowth = false) => {
+                    if (dataset.length === 0) return [];
+                    if (graphRange === 'ALL') return dataset;
+
+                    const now = new Date();
+                    let startDate = new Date();
+
+                    if (graphRange === '1M') startDate.setMonth(now.getMonth() - 1);
+                    else if (graphRange === 'YTD') startDate = new Date(now.getFullYear(), 0, 1); // Jan 1st this year
+
+                    const isoStart = getLocalISO(startDate);
+                    const sliced = dataset.filter(d => d.date >= isoStart);
+
+                    // For Growth Graph: Re-base to 0% at start of period
+                    if (isGrowth && sliced.length > 0) {
+                        const baseVal = sliced[0].value;
+                        // Convert % back to multiplier: 50% -> 1.5
+                        const baseMult = (baseVal / 100) + 1;
+
+                        return sliced.map(d => {
+                            const curMult = (d.value / 100) + 1;
+                            // Relative return: (Current / Base) - 1
+                            const newVal = ((curMult / baseMult) - 1) * 100;
+                            return { ...d, value: newVal };
+                        });
+                    }
+
+                    return sliced;
+                };
+
+                const displayValueData = getFilteredData(calc.totalValueGraph, false);
+                const displayGrowthData = getFilteredData(calc.growthGraphData, true);
+
+                const formatAxisDate = (dateStr) => {
+                    if (!dateStr) return '';
+                    // dateStr is "YYYY-MM-DD"
+                    const [y, m, d] = dateStr.split('-');
+                    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec'];
+                    const monthName = monthNames[parseInt(m, 10) - 1];
+                    const day = parseInt(d, 10); // Removes leading zero (01 -> 1)
+
+                    // Logic: If range is ALL, show year. If 1M or YTD, hide year.
+                    if (graphRange === 'ALL') {
+                        return `${day}. ${monthName} ${y}`;
+                    } else {
+                        return `${day}. ${monthName}`;
+                    }
+                };
+
+                // 2. CALCULATE TICKS & YEAR LINES
+                // We only show Year Lines if we are in 'ALL' mode or have lots of data
+                const showYearLines = graphRange === 'ALL';
+
                 const firstDate = series.length ? series[0].date : null;
                 const lastDate = series.length ? series[series.length - 1].date : null;
                 const firstYear = firstDate ? parseInt(firstDate.slice(0, 4), 10) : null;
                 const lastYear = lastDate ? parseInt(lastDate.slice(0, 4), 10) : null;
 
-                const nearestOnOrAfter = (target, dataset) => {
-                    const hit = dataset.find(p => p.date >= target);
-                    return hit ? hit : null;
-                };
-
-                const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
                 let yearTicks = [];
                 if (firstYear != null && lastYear != null) {
-                    for (let y = firstYear; y <= lastYear; y++) yearTicks.push(nearestOnOrAfter(`${y}-01-01`, series)?.date);
-                    yearTicks = uniq(yearTicks);
+                    for (let y = firstYear + 1; y <= lastYear; y++) {
+                        yearTicks.push(`${y}-01-01`);
+                    }
                 }
+
+                // Range Selector Component
+                const RangeSelector = () => (
+                    <div className="flex bg-gray-100 p-0.5 rounded-lg">
+                        {['1M', 'YTD', 'ALL'].map(r => (
+                            <button
+                                key={r}
+                                onClick={() => setGraphRange(r)}
+                                className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${graphRange === r
+                                    ? 'bg-white text-blue-600 shadow-sm'
+                                    : 'text-gray-400 hover:text-gray-600'
+                                    }`}
+                            >
+                                {r}
+                            </button>
+                        ))}
+                    </div>
+                );
+
+                // 1. HELPER: Convert Date String (YYYY-MM-DD) to Unix Timestamp (number)
+                const toUnix = (dateStr) => new Date(dateStr).getTime();
+
+                // 2. PREPARE DATA: Convert date strings to numbers for the charts
+                // We do this here so we don't mess up your original calculation logic
+                const numericValueData = displayValueData.map(d => ({ ...d, date: toUnix(d.date) }));
+                const numericGrowthData = displayGrowthData.map(d => ({ ...d, date: toUnix(d.date) }));
+
+                // 3. PREPARE TICKS: Convert your yearTicks to numbers
+                const numericYearTicks = yearTicks.map(dateStr => toUnix(dateStr));
+
+                // 4. UPDATED FORMATTER: Handles the timestamp coming from the chart
+                const formatAxisDateNumeric = (timestamp) => {
+                    const date = new Date(timestamp);
+                    // Convert back to YYYY-MM-DD to reuse your existing logic, or format directly here
+                    const dateStr = date.toISOString().split('T')[0];
+                    return formatAxisDate(dateStr);
+                };
+
+                const historicalGain = Object.values(calc.reports).reduce((acc, r) => acc + (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik345 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0) + (r.askGain || 0), 0);
+                const allTimeGain = historicalGain + (calc.unrealizedStockGain || 0);
+
+                const currentYearReport = calc.reports[new Date().getFullYear().toString()] || {};
 
                 return (
                     <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
@@ -1718,96 +1807,102 @@
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                             {/* LEFT: GRAPHS */}
                             <div className="lg:col-span-2 space-y-8">
-                                {/* Value Graph */}
-                                <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Porteføljens Værdi</h3>
-                                    <ResponsiveContainer width="100%" height={280}>
-                                        <AreaChart data={calc.totalValueGraph} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
-                                            <defs>
-                                                <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                                                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
-                                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                                                </linearGradient>
-                                            </defs>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                                            <XAxis
-                                                dataKey="date"
-                                                ticks={yearTicks}
-                                                tickFormatter={(d) => String(d).slice(0, 4)}
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
-                                                dy={10}
-                                            />
-                                            <YAxis
-                                                width={45}
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
-                                            />
-                                            <Tooltip
-                                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                formatter={(v) => formatCurrency(v)}
-                                            />
-                                            <Area
-                                                type="monotone"
-                                                dataKey="value"
-                                                stroke="#2563eb"
-                                                strokeWidth={2}
-                                                fill="url(#colorVal)"
-                                                isAnimationActive={false} // DISABLED ANIMATION
-                                            />
-                                        </AreaChart>
-                                    </ResponsiveContainer>
+                                {/* VALUE GRAPH */}
+                                <div className="bg-white p-4 rounded-xl border shadow-sm">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-gray-800 text-sm uppercase">Porteføljens Værdi</h3>
+                                        <RangeSelector />
+                                    </div>
+                                    <div className="h-64 w-full">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            {/* UPDATED: Use numericValueData */}
+                                            <AreaChart data={numericValueData}>
+                                                <defs>
+                                                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
+                                                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                                    </linearGradient>
+                                                </defs>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+
+                                                {/* UPDATED XAXIS */}
+                                                <XAxis
+                                                    dataKey="date"
+                                                    type="number"
+                                                    domain={['dataMin', 'dataMax']}
+                                                    tickFormatter={formatAxisDateNumeric}
+                                                    ticks={graphRange === 'ALL' ? numericYearTicks : null}
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                                    minTickGap={30}
+                                                />
+
+                                                <YAxis width={45} axisLine={false} tickLine={false} domain={['dataMin', 'dataMax']} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
+
+                                                {/* UPDATED TOOLTIP */}
+                                                <Tooltip formatter={(v) => formatCurrency(v)} labelFormatter={formatAxisDateNumeric} />
+
+                                                {/* UPDATED REFERENCE LINES */}
+                                                {showYearLines && numericYearTicks.map(timestamp => (
+                                                    <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
+                                                ))}
+
+                                                <Area type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={2} fill="url(#colorVal)" isAnimationActive={false} />
+                                            </AreaChart>
+                                        </ResponsiveContainer>
+                                    </div>
                                 </div>
 
-                                {/* Growth Graph */}
-                                <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Tidsvægtet Afkast (%)</h3>
-                                    <ResponsiveContainer width="100%" height={280}>
-                                        <AreaChart data={calc.growthGraphData} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
-                                            <defs>
-                                                <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
-                                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                                                </linearGradient>
-                                            </defs>
-                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                                            <XAxis
-                                                dataKey="date"
-                                                ticks={yearTicks}
-                                                tickFormatter={(d) => String(d).slice(0, 4)}
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
-                                                dy={10}
-                                            />
-                                            <YAxis
-                                                width={45}
-                                                axisLine={false}
-                                                tickLine={false}
-                                                tickFormatter={(v) => `${v.toFixed(0)}%`}
-                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
-                                            />
-                                            <Tooltip
-                                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                formatter={(v) => `${v.toFixed(2)}%`}
-                                            />
-                                            <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
-                                            <Area
-                                                type="monotone"
-                                                dataKey="value"
-                                                stroke="#10b981"
-                                                strokeWidth={2}
-                                                fill="url(#colorGrowth)"
-                                                isAnimationActive={false} // DISABLED ANIMATION
-                                            />
-                                        </AreaChart>
-                                    </ResponsiveContainer>
+                                {/* GROWTH GRAPH */}
+                                <div className="bg-white p-4 rounded-xl border shadow-sm">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-gray-800 text-sm uppercase">Tidsvægtet Afkast (%)</h3>
+                                        <RangeSelector />
+                                    </div>
+                                    <div className="h-64 w-full">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            {/* UPDATED: Use numericGrowthData */}
+                                            <AreaChart data={numericGrowthData}>
+                                                <defs>
+                                                    <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                                    </linearGradient>
+                                                </defs>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+
+                                                {/* UPDATED XAXIS */}
+                                                <XAxis
+                                                    dataKey="date"
+                                                    type="number"
+                                                    domain={['dataMin', 'dataMax']}
+                                                    tickFormatter={formatAxisDateNumeric}
+                                                    ticks={graphRange === 'ALL' ? numericYearTicks : null}
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                                    minTickGap={30}
+                                                />
+
+                                                <YAxis width={45} axisLine={false} tickLine={false} tickFormatter={(v) => `${v.toFixed(0)}%`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
+
+                                                {/* UPDATED TOOLTIP */}
+                                                <Tooltip formatter={(v) => `${v.toFixed(2)}%`} labelFormatter={formatAxisDateNumeric} />
+
+                                                <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
+
+                                                {/* UPDATED REFERENCE LINES */}
+                                                {showYearLines && numericYearTicks.map(timestamp => (
+                                                    <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
+                                                ))}
+
+                                                <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowth)" isAnimationActive={false} />
+                                            </AreaChart>
+                                        </ResponsiveContainer>
+                                    </div>
                                 </div>
                             </div>
-
                             {/* RIGHT: STATS TABLE (only on large screens) */}
                             <div className="hidden lg:block">
                                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden sticky top-6">
