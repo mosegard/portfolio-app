@@ -766,7 +766,9 @@
                     reports[y] = {
                         rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0,
                         withheldTax: 0, askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0,
-                        totalNormalTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] }
+                        totalNormalTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
+                        utilizedLossNormal: 0, carriedLossNormal: 0,
+                        utilizedLossAsk: 0, carriedLossAsk: 0
                     };
                 });
 
@@ -904,7 +906,82 @@
                     reports[y].totalNormalTax = normalTax;
                 });
 
-                // 3. Current Values
+
+                // --- 3. LOSS CARRY FORWARD LOGIC ---
+                // Initialize two separate buckets (PROOF OF SEPARATION)
+                let runningLossNormal = 0;
+                let runningLossAsk = 0;
+
+                // We must process years in order (2019 -> 2020 -> 2021...)
+                const sortedYears = [...years].sort();
+
+                sortedYears.forEach(y => {
+                    const r = reports[y];
+
+                    // --- BUCKET 1: Normal Share Income (Frie Midler) ---
+                    // strictly sum of Rubriks 66, 38, 61, 63
+                    const shareIncomeRaw = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
+
+                    if (shareIncomeRaw < 0) {
+                        // It's a loss year. Add to the bucket.
+                        runningLossNormal += Math.abs(shareIncomeRaw);
+                        r.carriedLossNormal = runningLossNormal;
+                    } else {
+                        // It's a gain year. Check if we have losses in the bucket.
+                        if (runningLossNormal > 0) {
+                            if (runningLossNormal >= shareIncomeRaw) {
+                                // Loss is bigger than gain: Wipe out tax, reduce bucket.
+                                r.utilizedLossNormal = shareIncomeRaw;
+                                runningLossNormal -= shareIncomeRaw;
+                            } else {
+                                // Gain is bigger than loss: Use all loss, empty bucket.
+                                r.utilizedLossNormal = runningLossNormal;
+                                runningLossNormal = 0;
+                            }
+                        }
+                        r.carriedLossNormal = runningLossNormal;
+                    }
+
+                    // --- BUCKET 2: ASK Income ---
+                    // strictly askGain
+                    if (r.askGain < 0) {
+                        runningLossAsk += Math.abs(r.askGain);
+                        r.carriedLossAsk = runningLossAsk;
+                    } else {
+                        if (runningLossAsk > 0) {
+                            if (runningLossAsk >= r.askGain) {
+                                r.utilizedLossAsk = r.askGain;
+                                runningLossAsk -= r.askGain;
+                            } else {
+                                r.utilizedLossAsk = runningLossAsk;
+                                runningLossAsk = 0;
+                            }
+                        }
+                        r.carriedLossAsk = runningLossAsk;
+                    }
+
+                    // --- FINAL CALCULATION ---
+
+                    // 1. Normal Tax: Calculated on (Income - Utilized Loss)
+                    const taxableShareIncome = Math.max(0, shareIncomeRaw - r.utilizedLossNormal);
+                    const limit = (TAX_LIMITS[y] || 61000) * (settings.married ? 2 : 1);
+
+                    let normalTax = 0;
+                    if (taxableShareIncome > 0) {
+                        normalTax = (taxableShareIncome <= limit)
+                            ? taxableShareIncome * 0.27
+                            : (limit * 0.27) + ((taxableShareIncome - limit) * 0.42);
+                    }
+                    if (r.rubrik345 > 0) normalTax += r.rubrik345 * 0.42;
+                    r.totalNormalTax = normalTax;
+
+                    // 2. ASK Tax: Calculated on (Gain - Utilized Loss)
+                    const taxableAsk = Math.max(0, r.askGain - r.utilizedLossAsk);
+                    r.askTax = taxableAsk * 0.17;
+                });
+
+
+                // 4. Current Values
                 let currentVal = 0;
                 let costBasisTotal = 0;
                 let unrealizedRubrik66Gain = 0;
@@ -930,13 +1007,30 @@
                 const liquidationAskTax = Math.max(0, totalAskBill - (ytd.paidAskTax || 0));
                 const totalShareIncome = (ytd.rubrik66 || 0) + (ytd.rubrik38 || 0) + (ytd.rubrik61 || 0) + (ytd.rubrik63 || 0) + unrealizedRubrik66Gain;
                 const taxLimit = (TAX_LIMITS[currentYear] || 61000) * (settings.married ? 2 : 1);
-                let taxOnTotal = 0;
+
                 if (totalShareIncome > 0) taxOnTotal = (totalShareIncome <= taxLimit) ? totalShareIncome * 0.27 : (taxLimit * 0.27) + ((totalShareIncome - taxLimit) * 0.42);
                 taxOnTotal += ((ytd.rubrik345 || 0) * 0.42);
+
+
+                // Check if we have unused losses from previous years available right now
+                const availableLossNormal = reports[parseInt(currentYear) - 1]?.carriedLossNormal || 0;
+                // Reduce the hypothetical income by that loss
+                const taxableHypothetical = Math.max(0, totalShareIncome - availableLossNormal);
+
+                // Recalculate tax on this reduced amount
+                let taxOnTotal = 0;
+                if (taxableHypothetical > 0) {
+                    taxOnTotal = (taxableHypothetical <= taxLimit)
+                        ? taxableHypothetical * 0.27
+                        : (taxLimit * 0.27) + ((taxableHypothetical - taxLimit) * 0.42);
+                }
+                taxOnTotal += ((ytd.rubrik345 || 0) * 0.42);
+
                 const liquidationNormalTax = Math.max(0, taxOnTotal - (ytd.totalNormalTax || 0));
+
                 const currentTax = liquidationAskTax + liquidationNormalTax;
 
-                // 4. Graph & Yearly Stats (INVESTED CAPITAL MODEL)
+                // 5. Graph & Yearly Stats (INVESTED CAPITAL MODEL)
                 // We track "Invested Assets" separately from "Bank Cash".
                 // Graph Value = Value of Stocks/ETFs (Always >= 0)
                 // Graph Flow  = Money entering market (Buy) or leaving (Sell/Div)
@@ -1318,9 +1412,14 @@
                 return candidates.sort((a, b) => b.ratio - a.ratio);
             }, [txs, marketData]);
 
- // --- VIEW RENDERERS ---
+           // --- VIEW RENDERERS ---
             const renderTaxReport = () => {
-                const r = calc.reports[taxYear] || { rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0, askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] } };
+                // Ensure default values exist for new loss fields
+                const r = calc.reports[taxYear] || { 
+                    rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0, 
+                    askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
+                    utilizedLossNormal: 0, carriedLossNormal: 0, utilizedLossAsk: 0, carriedLossAsk: 0
+                };
 
                 const currentYearStr = new Date().getFullYear().toString();
                 const isCurrentYear = taxYear === currentYearStr;
@@ -1328,22 +1427,25 @@
                 // --- 1. CALCULATIONS ---
                 const shareIncome = (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0);
                 
+                // Taxable Income = Gross Income - Utilized Loss
+                const taxableIncome = Math.max(0, shareIncome - r.utilizedLossNormal);
+
                 // Tax Limits (27% bracket limit)
                 const limitBase = TAX_LIMITS[taxYear] || 61000;
                 const limitActual = limitBase * (settings.married ? 2 : 1);
                 
-                // Normal Tax Calculation
+                // Normal Tax Calculation (Based on Taxable Income, NOT Raw Income)
                 let taxBill = 0;
                 let tax27 = 0;
                 let tax42 = 0;
 
-                if (shareIncome > 0) {
-                    if (shareIncome <= limitActual) {
-                        tax27 = shareIncome * 0.27;
+                if (taxableIncome > 0) {
+                    if (taxableIncome <= limitActual) {
+                        tax27 = taxableIncome * 0.27;
                         taxBill = tax27;
                     } else {
                         tax27 = limitActual * 0.27;
-                        tax42 = (shareIncome - limitActual) * 0.42;
+                        tax42 = (taxableIncome - limitActual) * 0.42;
                         taxBill = tax27 + tax42;
                     }
                 }
@@ -1356,7 +1458,7 @@
                 const askTaxToPay = Math.max(0, (r.askTax || 0) - (r.paidAskTax || 0));
 
                 // Progress Bar Calc
-                const progressPct = Math.min(100, Math.max(0, (shareIncome / limitActual) * 100));
+                const progressPct = Math.min(100, Math.max(0, (taxableIncome / limitActual) * 100));
 
                 return (
                     <div className="p-6 md:p-8 space-y-6 max-w-6xl mx-auto animate-in fade-in duration-300">
@@ -1375,8 +1477,8 @@
                                         <p className="text-xs text-gray-400 mt-1">Frie midler (Realisation & Lager)</p>
                                     </div>
                                     <div className="text-right">
-                                        <div className="text-sm text-gray-500">Realiseret indkomst</div>
-                                        <div className="text-xl font-bold text-gray-900">{formatCurrency(shareIncome)}</div>
+                                        <div className="text-sm text-gray-500">Skattegrundlag</div>
+                                        <div className={`text-xl font-bold ${taxableIncome >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(taxableIncome)}</div>
                                     </div>
                                 </div>
 
@@ -1388,12 +1490,12 @@
                                     </div>
                                     <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
                                         <div 
-                                            className={`h-full ${shareIncome > limitActual ? 'bg-orange-500' : 'bg-blue-600'}`} 
+                                            className={`h-full ${taxableIncome > limitActual ? 'bg-orange-500' : taxableIncome === 0 ? 'bg-transparent' : 'bg-blue-600'}`} 
                                             style={{width: `${progressPct}%`}}
                                         ></div>
                                     </div>
                                     <div className="mt-2 text-right text-[10px] text-gray-400">
-                                        {shareIncome > limitActual 
+                                        {taxableIncome > limitActual 
                                             ? <span className="text-orange-600 font-medium">Du betaler 42% af det overskydende beløb</span> 
                                             : <span>Du holder dig inden for 27% grænsen</span>
                                         }
@@ -1420,8 +1522,28 @@
                                             </span>
                                         </div>
                                     ))}
+                                    
+                                    {/* --- NEW: UTILIZED LOSS ROW --- */}
+                                    {r.utilizedLossNormal > 0 && (
+                                        <div className="flex justify-between items-center text-sm pt-2 text-green-700 bg-green-50 p-2 rounded border border-green-100">
+                                            <div className="flex items-center gap-2">
+                                                <i className="ph ph-arrow-u-down-left"></i>
+                                                <span>Fradrag fra tidligere års tab</span>
+                                            </div>
+                                            <span className="font-mono font-bold">-{formatCurrency(r.utilizedLossNormal)}</span>
+                                        </div>
+                                    )}
+
+                                    {/* --- NEW: CARRIED LOSS ROW (If result is still negative) --- */}
+                                    {r.carriedLossNormal > 0 && shareIncome < 0 && (
+                                        <div className="flex justify-between items-center text-sm pt-2 text-gray-500 italic">
+                                            <span>Tab til fremførsel (næste år)</span>
+                                            <span className="font-mono">{formatCurrency(r.carriedLossNormal)}</span>
+                                        </div>
+                                    )}
+
                                     {r.rubrik345 !== 0 && (
-                                        <div className="flex justify-between items-center text-sm pt-2">
+                                        <div className="flex justify-between items-center text-sm pt-2 mt-2 border-t border-gray-100 border-dashed">
                                             <div className="flex items-center gap-2">
                                                 <span className="bg-purple-100 text-purple-700 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded text-xs">R345</span>
                                                 <span className="text-gray-600">Kapitalindkomst</span>
@@ -1484,14 +1606,15 @@
                                         <p className="text-xs text-gray-400 mt-1">Lagerbeskattet (17%)</p>
                                     </div>
                                     <div className="text-right">
-                                        <div className="text-sm text-gray-500">Skattegrundlag</div>
-                                        <div className={`text-xl font-bold ${r.askGain >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(r.askGain)}</div>
+                                        <div className="text-sm text-gray-500">Beskatningsgrundlag</div>
+                                        {/* Taxable ASK is Gain - Utilized Loss */}
+                                        <div className={`text-xl font-bold ${r.askGain >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrency(Math.max(0, r.askGain - r.utilizedLossAsk))}</div>
                                     </div>
                                 </div>
 
                                 {/* Body */}
                                 <div className="flex-1">
-                                    {r.askGain === 0 && r.askTax === 0 ? (
+                                    {r.askGain === 0 && r.askTax === 0 && r.utilizedLossAsk === 0 ? (
                                         <div className="flex flex-col items-center justify-center h-full pb-10 text-gray-400 text-sm italic">
                                             <i className="ph ph-prohibit text-2xl mb-2 text-gray-300"></i>
                                             Ingen aktivitet på ASK.
@@ -1501,11 +1624,31 @@
                                             <div className="flex justify-between items-center text-sm border-b border-gray-50 pb-2">
                                                 <div className="flex items-center gap-2">
                                                     <span className="bg-teal-50 text-teal-700 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded text-xs">Lager</span>
-                                                    <span className="text-gray-600">Skattegrundlag (Afkast)</span>
+                                                    <span className="text-gray-600">Årets Afkast</span>
                                                 </div>
                                                 <span className="font-mono font-medium text-gray-900">{formatCurrency(r.askGain)}</span>
                                             </div>
-                                            <div className="flex justify-between items-center text-sm border-b border-gray-50 pb-2">
+
+                                            {/* --- NEW: UTILIZED ASK LOSS --- */}
+                                            {r.utilizedLossAsk > 0 && (
+                                                <div className="flex justify-between items-center text-sm text-green-700 bg-green-50 p-2 rounded border border-green-100">
+                                                    <div className="flex items-center gap-2">
+                                                        <i className="ph ph-arrow-u-down-left"></i>
+                                                        <span>Modregnet tab</span>
+                                                    </div>
+                                                    <span className="font-mono font-bold">-{formatCurrency(r.utilizedLossAsk)}</span>
+                                                </div>
+                                            )}
+
+                                            {/* --- NEW: CARRIED ASK LOSS --- */}
+                                            {r.carriedLossAsk > 0 && r.askGain < 0 && (
+                                                <div className="flex justify-between items-center text-sm text-gray-500 italic pb-2">
+                                                    <span>Tab til fremførsel</span>
+                                                    <span className="font-mono">{formatCurrency(r.carriedLossAsk)}</span>
+                                                </div>
+                                            )}
+
+                                            <div className="flex justify-between items-center text-sm border-b border-gray-50 pb-2 mt-2">
                                                 <div className="flex items-center gap-2">
                                                     <span className="bg-teal-50 text-teal-700 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded text-xs">17%</span>
                                                     <span className="text-gray-600">Beregnet Skat</span>
@@ -1535,7 +1678,7 @@
                                         <span className="font-bold text-xl text-teal-700">{formatCurrency(askTaxToPay)}</span>
                                     </div>
 
-                                    {/* ASK HYPOTHETICAL - STATIC TEXT */}
+                                    {/* ASK HYPOTHETICAL */}
                                     {isCurrentYear && (
                                         <div className="mt-4 pt-3 border-t border-dashed border-gray-300">
                                             <div className="flex justify-between items-center opacity-50">
@@ -1560,7 +1703,6 @@
                             </h3>
 
                             <div className="space-y-10">
-                                
                                 {/* Stocks Table */}
                                 <div>
                                     <h4 className="text-xs font-bold text-gray-500 uppercase mb-3 border-b border-gray-100 pb-2">Aktier (Realisationsprincip)</h4>
