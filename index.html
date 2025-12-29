@@ -182,7 +182,29 @@
     <div id="root" class="h-full"></div>
 
     <script type="text/babel">
-        const { useState, useMemo, useEffect } = React;
+        const { useState, useMemo, useEffect, Component } = React;
+
+        // --- CRASH HANDLER ---
+        class ErrorBoundary extends Component {
+            constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+            static getDerivedStateFromError(error) { return { hasError: true, error }; }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="p-6 text-red-900 bg-red-50 h-screen flex flex-col items-center justify-center">
+                            <h1 className="text-2xl font-bold mb-2">App Crashed</h1>
+                            <div className="bg-white p-4 border border-red-200 rounded text-xs font-mono mb-4 w-full overflow-auto">
+                                {this.state.error && this.state.error.toString()}
+                            </div>
+                            <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="px-6 py-3 bg-red-600 text-white rounded-lg font-bold shadow">
+                                Reset App & Clear Cache
+                            </button>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
         const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea, ComposedChart, Scatter } = Recharts;
         // --- UTILS ---
         const MONTHS_DK = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
@@ -1678,7 +1700,7 @@
                                             <XAxis
                                                 dataKey="date"
                                                 ticks={yearTicks}
-                                                tickFormatter={(d) => d.slice(0, 4)}
+                                                tickFormatter={(d) => String(d).slice(0, 4)}
                                                 axisLine={false}
                                                 tickLine={false}
                                                 tick={{ fontSize: 12, fill: '#9ca3af' }}
@@ -1722,7 +1744,7 @@
                                             <XAxis
                                                 dataKey="date"
                                                 ticks={yearTicks}
-                                                tickFormatter={(d) => d.slice(0, 4)}
+                                                tickFormatter={(d) => String(d).slice(0, 4)}
                                                 axisLine={false}
                                                 tickLine={false}
                                                 tick={{ fontSize: 12, fill: '#9ca3af' }}
@@ -2773,7 +2795,11 @@ Proceed?`;
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(
+            <ErrorBoundary>
+                <App />
+            </ErrorBoundary>
+        );
     </script>
 </body>
 
