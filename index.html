@@ -1706,7 +1706,7 @@
                             {/* Value */}
                             <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
-                                    <i className="ph ph-wallet"></i>Aktuel værdi
+                                    <i className="ph ph-wallet"></i>Værdi
                                 </div>
                                 <div className="mt-2">
                                     <div className="text-3xl font-bold text-gray-900 tracking-tight break-words" style={{ wordBreak: 'break-word' }}>{formatCurrencyNoDecimals(calc.currentVal)}</div>
@@ -1715,7 +1715,7 @@
                             {/* Liquidation */}
                             <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
-                                    <i className="ph ph-bank"></i>Likvidationsværdi
+                                    <i className="ph ph-bank"></i>Værdi efter skat
                                 </div>
                                 <div className="mt-2">
                                     <div className="text-3xl font-bold text-gray-900 tracking-tight break-words" style={{ wordBreak: 'break-word' }}>{formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}</div>
@@ -1735,7 +1735,7 @@
                             {/* Today's Increase */}
                             <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
-                                    <i className="ph ph-arrow-up-right"></i>I dag
+                                    <i className="ph ph-arrow-up-right"></i>Gevinst/Tab i dag
                                 </div>
                                 <div className="mt-2">
                                     {(() => {
@@ -1776,7 +1776,7 @@
                         <div className="block lg:hidden mt-8">
                             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                                 <div className="p-4 border-b border-gray-100 bg-gray-50">
-                                    <h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Afkast per år</h3>
+                                    <h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Afkast pr. år</h3>
                                 </div>
                                 <div className="divide-y divide-gray-100">
                                     {calc.yearlyStats.map(stat => (
@@ -1788,12 +1788,12 @@
                                             {/* Gain Row */}
                                             <div className="flex justify-between items-center text-xs text-gray-500 mb-1">
                                                 <span>Gevinst/Tab</span>
-                                                <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrency(stat.gainAbs)}</span>
+                                                <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrencyNoDecimals(stat.gainAbs)}</span>
                                             </div>
                                             {/* Flow Row */}
                                             <div className="flex justify-between items-center text-xs text-gray-500">
                                                 <span>Kapitalstrøm</span>
-                                                <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrency(stat.breakdown.in)}\nOut: ${formatCurrency(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrency(stat.flow)}</span>
+                                                <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrencyNoDecimals(stat.breakdown.in)}\nOut: ${formatCurrencyNoDecimals(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrencyNoDecimals(stat.flow)}</span>
                                             </div>
                                         </div>
                                     ))}
@@ -1919,12 +1919,12 @@
                                                 {/* Gain Row */}
                                                 <div className="flex justify-between items-center text-xs text-gray-500 mb-1">
                                                     <span>Gevinst/Tab</span>
-                                                    <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrency(stat.gainAbs)}</span>
+                                                    <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrencyNoDecimals(stat.gainAbs)}</span>
                                                 </div>
                                                 {/* Flow Row */}
                                                 <div className="flex justify-between items-center text-xs text-gray-500">
                                                     <span>Kapitalstrøm</span>
-                                                    <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrency(stat.breakdown.in)}\nOut: ${formatCurrency(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrency(stat.flow)}</span>
+                                                    <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrencyNoDecimals(stat.breakdown.in)}\nOut: ${formatCurrencyNoDecimals(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrencyNoDecimals(stat.flow)}</span>
                                                 </div>
                                             </div>
                                         ))}
