@@ -64,7 +64,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Portfolio Master</title>
+    <title>Portefølje</title>
 
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -584,7 +584,14 @@
                 if (ghConfig.token && ghConfig.repo && rows.length === 0) loadFromGithub();
             }, [ghConfig]);
 
-            useEffect(() => { localStorage.setItem('marketDataCache', JSON.stringify(marketData)); }, [marketData]);
+            useEffect(() => {
+                try {
+                    localStorage.setItem('marketDataCache', JSON.stringify(marketData));
+                } catch (e) {
+                    console.warn("Storage full: Could not cache market data.", e);
+                    // Optional: If full, try to clear old data or just ignore
+                }
+            }, [marketData]);
 
             const txs = useMemo(() => rowsToTransactions(rows), [rows]);
             const uniqueTickers = useMemo(() => [...new Set(txs.map(t => t.ticker).filter(t => t && !['DKK', 'USD', 'EUR', 'GBP', 'SEK', 'NOK'].includes(t)))], [txs]);
@@ -595,19 +602,19 @@
                 return [...yr].sort().reverse();
             }, [txs]);
 
-            const fetchMarketData = async (silent = false) => {
-                if (!silent) setLoading(true); // Only show big spinner if user clicked button
+        const fetchMarketData = async (silent = false) => {
+                if (!silent) setLoading(true);
 
                 const now = Math.floor(Date.now() / 1000);
-
-                // ... (Smart Start Date Logic - Keep as is) ...
-                let startTimestamp = now - (10 * 365 * 24 * 60 * 60);
+                
+                // 1. Determine the Portfolio Start Date (The date of your very first trade ever)
+                let globalStart = now - (2 * 365 * 24 * 60 * 60); // Default 2 years
                 if (txs.length > 0) {
                     const firstTx = txs[0].date.getTime() / 1000;
-                    startTimestamp = Math.min(startTimestamp, firstTx - (30 * 24 * 60 * 60));
+                    globalStart = firstTx - (30 * 24 * 60 * 60); // Buffer 30 days
                 }
 
-                // ... (Identify Targets Logic - Keep as is) ...
+                // Identify all tickers
                 const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
                 const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`)];
 
@@ -620,7 +627,22 @@
 
                 await Promise.all(allTickers.map(async (ticker) => {
                     try {
-                        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(startTimestamp)}&period2=${now}&interval=1d&events=div`;
+                        // --- CORRECTED DATE LOGIC ---
+                        // Default to Global Start (Crucial for Currencies like USDDKK=X)
+                        let myStart = globalStart; 
+
+                        // Check if this is a specific Stock/ETF we traded
+                        // (Currencies won't be in 'uniqueTickers', so they keep the global start)
+                        if (uniqueTickers.includes(ticker)) {
+                            const firstTx = txs.find(t => t.ticker === ticker);
+                            if (firstTx) {
+                                // For stocks, only fetch from the first purchase date to save space
+                                myStart = (firstTx.date.getTime() / 1000) - (30 * 24 * 60 * 60);
+                            }
+                        }
+                        // -----------------------------
+
+                        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${now}&interval=1d&events=div`;
                         const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
                         const json = await res.json();
 
@@ -630,19 +652,20 @@
                             const quotes = result.indicators.quote[0];
                             const dates = result.timestamp;
 
+                            // Compress: Round numbers to 2 decimals to save space
                             const cleanHistory = dates.map((t, i) => ({
                                 date: new Date(t * 1000).toISOString().split('T')[0],
-                                close: quotes.close[i]
+                                close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
                             })).filter(x => x.close != null);
 
                             const livePrice = meta.regularMarketPrice;
                             let prevClose = livePrice;
 
-                            // Previous Close Logic (Keep as is)
                             if (cleanHistory.length >= 2) {
                                 const lastCandle = cleanHistory[cleanHistory.length - 1];
                                 const secondLastCandle = cleanHistory[cleanHistory.length - 2];
                                 const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
+                                
                                 if (isLastCandleToday) prevClose = secondLastCandle.close;
                                 else prevClose = lastCandle.close;
                             } else if (cleanHistory.length === 1) {
@@ -652,7 +675,6 @@
                             newMData[ticker] = {
                                 ...newMData[ticker],
                                 history: cleanHistory,
-                                instrumentType: meta.instrumentType,
                                 currency: meta.currency,
                                 price: livePrice,
                                 previousClose: prevClose,
@@ -664,7 +686,15 @@
                 }));
 
                 setMarketData(newMData);
-                setLastUpdate(new Date()); // Update timestamp
+                setLastUpdate(new Date());
+                
+                // Safe Save
+                try {
+                    localStorage.setItem('marketDataCache', JSON.stringify(newMData));
+                } catch (e) {
+                    console.warn("Storage full (QuotaExceeded). Cache not saved, but app will work.", e);
+                }
+                
                 if (!silent) setLoading(false);
             };
 
@@ -1181,7 +1211,7 @@
 
                                             return (
                                                 <tr key={p.ticker + p.acc} className="hover:bg-gray-50">
-                                                    { /* TICKER & ACCOUNT */ }
+                                                    { /* TICKER & ACCOUNT */}
                                                     <td className="px-1 py-3 font-medium text-gray-900 flex items-center gap-2 whitespace-nowrap">
                                                         <span
                                                             className={`w-2.5 h-2.5 rounded-full ${isMarketOpen ? 'bg-green-500 animate-pulse shadow-[0_0_5px_rgba(34,197,94,0.6)]' : 'bg-gray-300'}`}
@@ -1189,31 +1219,31 @@
                                                         ></span>
                                                         {p.ticker}
                                                     </td>
-                                                    { /* Quantity */ }
+                                                    { /* Quantity */}
                                                     <td className="px-1 py-3 text-right whitespace-nowrap hidden xl:table-cell">{formatDanishNumber(p.qty, 10)}</td>
-                                                    { /* Price */ }
+                                                    { /* Price */}
                                                     <td className="px-1 py-3 text-right font-mono font-medium text-blue-700 whitespace-nowrap hidden sm:table-cell">
                                                         {price > 0 ?
                                                             <span>{formatNumber2(price)}</span>
                                                             : <span className="text-red-300 text-xs">...</span>
                                                         }
                                                     </td>
-                                                    { /* Daily Gain */ }
-                                                    <td className={`px-1 py-3 text-right font-medium whitespace-nowrap ${dailyGainVal >= 0 ? 'text-green-600' : 'text-red-600'}`}> 
+                                                    { /* Daily Gain */}
+                                                    <td className={`px-1 py-3 text-right font-medium whitespace-nowrap ${dailyGainVal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                         {price > 0 ? formatCurrency(dailyGainVal) : '-'}
                                                     </td>
-                                                    { /* Daily % with tooltip */ }
+                                                    { /* Daily % with tooltip */}
                                                     <td
                                                         className={`px-1 py-3 text-right border-b border-dotted border-gray-300 cursor-help whitespace-nowrap ${dailyPct >= 0 ? 'text-green-600' : 'text-red-600'}`}
                                                         title={debugTitle}
                                                     >
                                                         {price > 0 ? `${formatNumber2(dailyPct)}%` : '-'}
                                                     </td>
-                                                    { /* Value */ }
+                                                    { /* Value */}
                                                     <td className="px-1 py-3 text-right font-bold whitespace-nowrap hidden lg:table-cell">{formatCurrency(val)}</td>
-                                                    { /* Cost Basis */ }
+                                                    { /* Cost Basis */}
                                                     <td className={`px-1 py-3 text-right whitespace-nowrap ${gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(gain)}</td>
-                                                    { /* Unrealized % */ }
+                                                    { /* Unrealized % */}
                                                     <td className={`px-1 py-3 text-right whitespace-nowrap hidden sm:table-cell ${gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{pct === null ? '—' : `${formatNumber2(pct)}%`}</td>
                                                 </tr>
                                             );
