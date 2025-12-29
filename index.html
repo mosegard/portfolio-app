@@ -2547,11 +2547,18 @@ Proceed?`;
                     {showSettings && (
                         <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
                             <div className="bg-white rounded-xl shadow-2xl p-6 w-96 space-y-4">
-                                <h2 className="font-bold text-lg">Cloud Sync Opsætning</h2>
+                                <h2 className="font-bold text-lg">Indstillinger</h2>
                                 <input className="w-full border p-2 rounded" placeholder="Ejer (Bruger)" value={ghConfig.owner} onChange={e => setGhConfig({ ...ghConfig, owner: e.target.value })} />
                                 <input className="w-full border p-2 rounded" placeholder="Repo-navn" value={ghConfig.repo} onChange={e => setGhConfig({ ...ghConfig, repo: e.target.value })} />
                                 <input className="w-full border p-2 rounded" placeholder="Filsti (data.csv)" value={ghConfig.path} onChange={e => setGhConfig({ ...ghConfig, path: e.target.value })} />
                                 <input className="w-full border p-2 rounded" type="password" placeholder="GitHub Token (Repo-adgang)" value={ghConfig.token} onChange={e => setGhConfig({ ...ghConfig, token: e.target.value })} />
+                                {/* Import CSV moved here */}
+                                <div className="flex flex-col gap-2 pt-2">
+                                    <label className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium cursor-pointer">
+                                        <i className="ph ph-upload-simple"></i> Importer CSV
+                                        <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+                                    </label>
+                                </div>
                                 <div className="flex gap-2">
                                     <button onClick={() => { localStorage.setItem('gh_config', JSON.stringify(ghConfig)); setShowSettings(false); loadFromGithub(); }} className="flex-1 bg-blue-600 text-white py-2 rounded font-medium">Gem & Forbind</button>
                                     <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-gray-500">Annuller</button>
@@ -2631,15 +2638,11 @@ Proceed?`;
 
                         </div>
 
-                        {/* Bottom Actions */}
-                        <div className="p-4 border-t border-gray-200">
-                            <button onClick={fetchMarketData} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 mb-2">
-                                {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>} Opdater priser
+                        {/* Bottom Actions: Only Settings button for desktop sidebar */}
+                        <div className="p-4 border-t border-gray-200 flex flex-col gap-2">
+                            <button onClick={() => setShowSettings(true)} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700">
+                                <i className="ph ph-gear-six"></i> Indstillinger
                             </button>
-                            <label className="flex items-center justify-center gap-2 w-full px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium cursor-pointer">
-                                <i className="ph ph-upload-simple"></i> Importer CSV
-                                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
-                            </label>
                         </div>
                     </div>
 
@@ -2712,15 +2715,11 @@ Proceed?`;
                                     </button>
                                 </div>
 
-                                {/* Bottom Actions */}
-                                <div className="p-4 border-t border-gray-200">
-                                    <button onClick={() => { fetchMarketData(); setMobileNavOpen(false); }} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 mb-2">
-                                        {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>} Opdater priser
+                                {/* Bottom Actions: Only Settings button for mobile */}
+                                <div className="p-4 border-t border-gray-200 flex flex-col gap-2">
+                                    <button onClick={() => { setShowSettings(true); setMobileNavOpen(false); }} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700">
+                                        <i className="ph ph-gear-six"></i> Indstillinger
                                     </button>
-                                    <label className="flex items-center justify-center gap-2 w-full px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium cursor-pointer">
-                                        <i className="ph ph-upload-simple"></i> Importer CSV
-                                        <input type="file" accept=".csv" className="hidden" onChange={(e) => { handleFileUpload(e); setMobileNavOpen(false); }} />
-                                    </label>
                                 </div>
                             </div>
                         </div>
@@ -2741,6 +2740,10 @@ Proceed?`;
                                 </h1>
                             </div>
                             <div className="flex items-center gap-2">
+                                {/* Small Opdater priser button */}
+                                <button onClick={fetchMarketData} className="p-2 rounded-full bg-white border border-gray-200 hover:bg-blue-50 text-blue-600 text-lg shadow-sm" title="Opdater priser">
+                                    {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>}
+                                </button>
                                 {statusMsg && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full animate-pulse">{statusMsg}</span>}
                                 {/* Hamburger (right) on small screens */}
                                 <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-gray-700 hover:text-gray-900" aria-label="Open menu">
