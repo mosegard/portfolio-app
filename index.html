@@ -1,0 +1,2784 @@
+<!-- /*
+ * PORTFOLIO MASTER - DATA SCHEMA & LOGIC GUIDE
+ * ============================================
+ * This application tracks portfolio performance (Danish Tax Compliance)
+ * and manages bank balances across multiple currencies.
+ *
+ * INTENDED USE:
+ * - Tracks realized gains/losses (Stock Realization Principle).
+ * - Tracks unrealized gains for ETFs (Inventory Principle/Lagerbeskatning).
+ * - Generates accurate Rubrik 66/38/345 figures for SKAT.
+ * - Simulates bank account balances in their native currency.
+ *
+ * LIMITATIONS:
+ * - Stocks & ETFs must use separate Types due to differing Danish tax rules.
+ * - Corporate Actions (Spin-offs, Mergers) require manual cost-basis adjustment.
+ *
+ * CSV COLUMN DEFINITIONS (Strict Rules):
+ * -------------------------------------------------------------------------
+ * 1. Date        (DD-MM-YYYY) : Transaction date.
+ * * 2. Type        (Enum)       : 
+ * - 'Stock'    : Standard equity (Realization Tax).
+ * - 'ETF'      : Exchange Traded Fund (Inventory Tax).
+ * - 'Dividend' : Payout from a holding.
+ * - 'Cash'     : Deposit/Withdrawal/Transfer/Interest.
+ *
+ * 3. Ticker      (String)     : Asset Symbol (e.g., 'NOVO-B', 'AAPL'). 
+ * - REQUIRED for: Stock, ETF, Dividend.
+ * - EMPTY for: Cash.
+ *
+ * 4. Qty         (Number)     : 
+ * - Trades     : Number of shares (e.g., 10).
+ * - Div/Cash   : The Gross Payout Amount (e.g., 100 USD).
+ *
+ * 5. Price       (Number)     : 
+ * - Trades     : Price per share in 'Currency' (e.g., 150.50).
+ * - Div/Cash   : LEAVE BLANK. (Logic treats this as '1').
+ *
+ * 6. Currency    (String)     : The currency of the 'Price' or 'Qty' (e.g., 'USD').
+ * * 7. FxRate      (Number)     : The multiplier to convert Asset Currency -> DKK.
+ * - SKAT requires the actual rate used on the transaction date.
+ * - If Asset is DKK, this is 1. If USD, approx 7.5.
+ *
+ * 8. Commission  (Number)     : Trading fees (Kurtage) paid to the bank.
+ * - USED FOR: Stock/ETF trades.
+ * - CURRENCY: **Always the ACCOUNT'S currency.**
+ * (e.g., If DKK Account, enter fees in DKK).
+ *
+ * 9. Withheld Tax (Number)    : Tax taken at source (Kildeskat/Udbytteskat).
+ * - USED FOR: Dividends.
+ * - CURRENCY: **Always the ACCOUNT'S currency.**
+ * (Enter the DKK value deducted from your balance).
+ *
+ * 10. Account    (String)     : The Bank Account ID. 
+ * - Determines the 'Balance' currency.
+ * - Determines the currency of 'Commission' and 'Withheld Tax'.
+ *
+ * 11. Note       (String)     : Optional text description.
+ */ -->
+
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Portfolio Master</title>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://npmcdn.com/flatpickr/dist/l10n/da.js"></script>
+
+    <style>
+        body {
+            background-color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            min-height: 100vh;
+            overflow: auto;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            height: 6px;
+            width: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .input-base {
+            transition: all 0.2s;
+            outline: none;
+            background: transparent;
+        }
+
+        .input-base:focus {
+            background: white;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+            border-color: #3b82f6;
+        }
+
+        .sticky-col-date {
+            position: sticky;
+            left: 0;
+            z-index: 20;
+        }
+
+        .sticky-col-action {
+            position: sticky;
+            right: 0;
+            z-index: 20;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e5e7eb;
+            padding: 20px;
+        }
+
+        .nav-item {
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #4b5563;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.15s;
+        }
+
+        .nav-item:hover {
+            background-color: #f3f4f6;
+            color: #111827;
+        }
+
+        .nav-item.active {
+            background-color: #eff6ff;
+            color: #1d4ed8;
+        }
+
+        .sub-nav-item {
+            cursor: pointer;
+            padding: 6px 12px 6px 36px;
+            font-size: 13px;
+            color: #6b7280;
+            border-radius: 6px;
+            transition: all 0.15s;
+            display: block;
+        }
+
+        .sub-nav-item:hover {
+            color: #111827;
+            background-color: #f9fafb;
+        }
+
+        .sub-nav-item.active {
+            color: #1d4ed8;
+            font-weight: 600;
+            background-color: #eff6ff;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect } = React;
+        const { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea, ComposedChart, Scatter } = Recharts;
+        // --- UTILS ---
+        const MONTHS_DK = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+        const CSV_COLUMNS = ['Date', 'Type', 'Ticker', 'Qty', 'Price', 'Currency', 'FxRate', 'Commission', 'Withheld Tax', 'Account', 'Note'];
+        const TYPE_OPTIONS = ['Stock', 'ETF', 'Cash', 'Dividend', 'Option'];
+        const CURRENCY_OPTIONS = ['DKK', 'USD', 'EUR', 'NOK', 'SEK', 'GBP'];
+
+        const TAX_LIMITS = {
+            '2026': 61000,
+            '2025': 61000,
+            '2024': 61000,
+            '2023': 58900,
+            '2022': 57200,
+            '2021': 56500,
+            '2020': 55300,
+            '2019': 54000,
+            '2018': 52900,
+            '2017': 51700
+        };
+
+
+        const toPrettyDate = (danishDate) => {
+            if (!danishDate || danishDate.length < 8) return danishDate;
+            const [d, m, y] = danishDate.split('/');
+            if (!d || !m || !y) return danishDate;
+
+            const mName = MONTHS_DK[parseInt(m, 10) - 1];
+            // Ensure day is zero-padded (e.g. "6" -> "06")
+            const dPad = d.toString().padStart(2, '0');
+            return `${dPad}-${mName}-${y}`;
+        };
+
+        const toIso = (danishDate) => {
+            if (!danishDate || danishDate.length < 10) return '';
+            const [d, m, y] = danishDate.split('/');
+            if (!d || !m || !y) return '';
+            return `${y}-${m}-${d}`;
+        };
+
+        // NEW: Convert YYYY-MM-DD (ISO from input) -> DD/MM/YYYY (Danish for storage)
+        const fromIso = (isoDate) => {
+            if (!isoDate) return '';
+            const [y, m, d] = isoDate.split('-');
+            return `${d}/${m}/${y}`;
+        };
+
+        const parseDanishNumber = (str) => {
+            if (str == null || str === '') return 0;
+            if (typeof str === 'number') return str;
+
+            const s = String(str).trim();
+
+            // If it contains a dot but NO comma, assume it's a standard JS/US number 
+            // (This handles data coming back from GitHub Sync)
+            if (s.includes('.') && !s.includes(',')) {
+                const val = parseFloat(s);
+                return isNaN(val) ? 0 : val;
+            }
+
+            // Otherwise, apply strict Danish Logic (Dots = Thousands, Comma = Decimal)
+            const norm = s.replace(/\./g, '').replace(',', '.');
+            const n = parseFloat(norm);
+            return isNaN(n) ? 0 : n;
+        };
+
+        const parseDanishDate = (dateStr) => {
+            if (!dateStr) return null;
+            try {
+                const parts = String(dateStr).trim().split(/[\/\.\s:]+/);
+                if (parts.length < 3) return null;
+                return new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+            } catch { return null; }
+        };
+
+        const getLocalISO = (dateObj) => {
+            if (!dateObj || isNaN(dateObj)) return '';
+            const offset = dateObj.getTimezoneOffset() * 60000;
+            return new Date(dateObj.getTime() - offset).toISOString().split('T')[0];
+        };
+
+        const formatDanishNumber = (val, decimals = 2) => {
+            const n = parseDanishNumber(val);
+            return new Intl.NumberFormat('da-DK', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: decimals
+            }).format(n);
+        };
+
+
+        const formatCurrency = (val, currency = 'DKK') =>
+            new Intl.NumberFormat('da-DK', { style: 'currency', currency }).format(val || 0);
+
+        // Helper: Format currency with no decimals
+        const formatCurrencyNoDecimals = (val, currency = 'DKK') =>
+            new Intl.NumberFormat('da-DK', { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val || 0);
+
+        const normalizeDate = (rawStr) => {
+            if (!rawStr) return '';
+            const s = String(rawStr).trim();
+
+            // 1. Split by any non-digit character (., -, /, space, :)
+            const parts = s.split(/[^0-9]+/).filter(Boolean);
+
+            // 2. If we have at least 3 parts (Day, Month, Year), reconstruct the date
+            if (parts.length >= 3) {
+                // Detection: If 1st part is 4 digits, assume ISO (YYYY-MM-DD) -> Convert to DD/MM/YYYY
+                if (parts[0].length === 4) {
+                    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+                }
+                // Otherwise assume Danish/European (DD-MM-YYYY) -> Keep as DD/MM/YYYY
+                // We intentionally ignore parts[3]+ (Time info)
+                return `${parts[0]}/${parts[1]}/${parts[2]}`;
+            }
+
+            // Fallback
+            return s;
+        };
+
+        const formatNumber2 = (val) => new Intl.NumberFormat('da-DK', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(parseDanishNumber(val) || 0);
+
+        const displayDateToIso = (dStr) => {
+            if (!dStr) return '';
+            const parts = dStr.split('/');
+            if (parts.length !== 3) return dStr;
+            return `${parts[2]}-${parts[1]}-${parts[0]}`;
+        };
+
+        // --- IMPROVED CSV NORMALIZATION ---
+        const determineType = (rawType, ticker, qty) => {
+            const t = String(rawType || '').trim().toUpperCase();
+            const typeMap = { 'STOCK': 'Stock', 'ETF': 'ETF', 'CASH': 'Cash', 'DIVIDEND': 'Dividend', 'OPTION': 'Option' };
+            if (typeMap[t]) return typeMap[t];
+            if (!t && ticker && parseDanishNumber(qty) !== 0) return 'Stock';
+            return rawType || 'Cash';
+        };
+
+        const normalizeCurrency = (raw) => {
+            const map = { 'DANISH KRONE': 'DKK', 'KR': 'DKK', '': 'DKK' };
+            const up = String(raw || '').trim().toUpperCase();
+            return map[up] || (CURRENCY_OPTIONS.includes(up) ? up : 'DKK');
+        };
+
+        const normalizeCsvRow = (row) => {
+            // Legacy mapping (if loading old files, map Cost -> Commission by default)
+            const legacyToNew = {
+                'Dato': 'Date', 'Navn': 'Ticker', 'Antal': 'Qty', 'Kurs': 'Price',
+                'Valuta': 'FxRate', 'Omkst./udbytteskat': 'Commission', // Map legacy cost to Commission
+                'Konto': 'Account', 'Stock': 'Currency', 'Kilde': 'Note',
+                'Cost': 'Commission' // Map English 'Cost' to 'Commission' for migration
+            };
+
+            const out = { ...row };
+            Object.keys(legacyToNew).forEach((oldKey) => {
+                if (out[oldKey] != null && out[legacyToNew[oldKey]] == null) {
+                    out[legacyToNew[oldKey]] = out[oldKey];
+                }
+            });
+
+            out['Date'] = normalizeDate(out['Date']);
+            out['Ticker'] = String(out['Ticker'] || '').trim();
+            out['Account'] = String(out['Account'] || '').trim();
+            out['Note'] = String(out['Note'] || '').trim();
+
+            const resolvedType = determineType(out['Type'], out['Ticker'], out['Qty']);
+            out['Type'] = resolvedType;
+            out['Currency'] = normalizeCurrency(out['Currency']);
+
+            const rawFx = parseDanishNumber(out['FxRate']);
+            out['FxRate'] = rawFx === 0 ? 1 : rawFx;
+
+            // Price defaults to 1 for Cash/Dividend
+            const priceDefault = (resolvedType === 'Cash' || resolvedType === 'Dividend') ? 1 : 0;
+            out['Price'] = parseDanishNumber(out['Price'] || priceDefault);
+
+            out['Qty'] = parseDanishNumber(out['Qty'] || 0);
+            out['Commission'] = parseDanishNumber(out['Commission'] || 0);
+            out['Withheld Tax'] = parseDanishNumber(out['Withheld Tax'] || 0);
+
+            // If it's a Dividend and someone used the legacy 'Cost' mapping, move Commission -> Tax
+            if (resolvedType === 'Dividend' && out['Commission'] !== 0 && out['Withheld Tax'] === 0) {
+                out['Withheld Tax'] = out['Commission'];
+                out['Commission'] = 0;
+            }
+
+            return out;
+        };
+
+        const normalizeAllRows = (rows) => rows.map(normalizeCsvRow);
+
+        // --- VALIDATION HELPER ---
+        const validateData = (rows) => {
+            const errors = [];
+            const validTypes = ['STOCK', 'ETF', 'CASH', 'DIVIDEND', 'OPTION', ''];
+
+            rows.forEach((row, index) => {
+                // Check 1: Valid Type
+                const type = (row['Type'] || '').trim().toUpperCase();
+                if (!validTypes.includes(type)) {
+                    errors.push(`Row ${index + 1}: Invalid Type '${row['Type']}'`);
+                }
+
+                // Check 2: Valid Date
+                const date = parseDanishDate(row['Date']);
+                if (!date && row['Date']) {
+                    errors.push(`Row ${index + 1}: Invalid Date '${row['Date']}'`);
+                }
+
+                // Check 3: Required fields for Trades AND Dividends
+                if ((type === 'STOCK' || type === 'ETF' || type === 'DIVIDEND') && !row['Ticker']) {
+                    errors.push(`Row ${index + 1}: ${type} missing Ticker symbol`);
+                }
+
+                // Check 4: Critical FxRate for non-DKK assets (Trades & Dividends)
+                const cur = String(row['Currency'] || 'DKK').toUpperCase();
+                const fx = row['FxRate'];
+
+                // Logic: If it's foreign currency (not DKK) AND rate is missing or 1...
+                if (cur !== 'DKK' && (!fx || fx === 1)) {
+                    // ...and it's a relevant type (Stock, ETF, or Dividend)
+                    if (['STOCK', 'ETF', 'DIVIDEND'].includes(type)) {
+                        errors.push(`Row ${index + 1}: Critical — ${cur} ${row['Type']} has invalid FxRate (1.00). Tax report will be wrong.`);
+                    }
+                }
+            });
+            return errors;
+        };
+
+        // GitHub API
+        function utf8_to_b64(str) { return window.btoa(unescape(encodeURIComponent(str))); }
+        function b64_to_utf8(str) { return decodeURIComponent(escape(window.atob(str))); }
+
+        // --- LOGIC ---
+        function rowsToTransactions(rows) {
+            const txs = [];
+            rows.forEach((row, index) => {
+                const date = parseDanishDate(row['Date']);
+                if (!date) return;
+
+                const typeRaw = (row['Type'] || '').trim();
+                if (typeRaw.toUpperCase() === 'OPTION') return;
+
+                const qty = row['Qty'];
+                const source = (row['Note'] || '').toLowerCase();
+                const ticker = (row['Ticker'] || '').toString().trim();
+                let account = (row['Account'] || '').toString().trim();
+                if (!account) account = '(Unspecified)';
+
+                let txType = 'UNKNOWN';
+                let assetCategory = 'Stock'; // Default
+
+                // Trust the CSV 'Type' column (case-insensitive)
+                if (typeRaw.toUpperCase() === 'ETF') {
+                    assetCategory = 'ETF';
+                    txType = qty >= 0 ? 'BUY' : 'SELL';
+                }
+                else if (typeRaw.toUpperCase() === 'STOCK') {
+                    assetCategory = 'Stock';
+                    txType = qty >= 0 ? 'BUY' : 'SELL';
+                }
+                else if (typeRaw.toUpperCase() === 'CASH') {
+                    assetCategory = 'Cash';
+                    if (source.includes('udbytte') || source.includes('dividend')) txType = 'DIVIDEND';
+                    else if (source.includes('interest') || source.includes('rente')) txType = 'INTEREST';
+                    else txType = 'TRANSFER';
+                } else if (typeRaw.toUpperCase() === 'DIVIDEND') {
+                    assetCategory = 'Cash';
+                    txType = 'DIVIDEND';
+                } else {
+                    // Fallback for implicit types
+                    if (ticker && qty !== 0 && ticker !== 'DKK') txType = qty >= 0 ? 'BUY' : 'SELL';
+                }
+
+                txs.push({
+                    id: index,
+                    raw: row,
+                    date,
+                    type: txType,
+                    assetType: assetCategory,
+                    ticker,
+                    qty,
+                    price: row['Price'],
+                    fxRate: (row['FxRate'] || 1),
+                    commission: row['Commission'],
+                    tax: row['Withheld Tax'],
+                    currency: row['Currency'],
+                    account
+                });
+            });
+
+            // Stable sort
+            // Enhanced Sort: Date -> Buys First -> Original Order
+            txs.sort((a, b) => {
+                // 1. Date (Earliest first)
+                const dateDiff = a.date - b.date;
+                if (dateDiff !== 0) return dateDiff;
+
+                // 2. Same Date? Process BUYS (positive Qty) before SELLS (negative Qty)
+                // This ensures the Cost Basis pool is filled before we draw from it.
+                if (a.qty >= 0 && b.qty < 0) return -1;
+                if (a.qty < 0 && b.qty >= 0) return 1;
+
+                // 3. Fallback to CSV order
+                return a.id - b.id;
+            });
+            return txs;
+        }
+
+        // --- CUSTOM DATE PICKER COMPONENT ---
+        const FlatpickrDate = ({ value, onChange, onKeyDown }) => {
+            const inputRef = React.useRef(null);
+            const fpRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (inputRef.current) {
+                    // Initialize Flatpickr
+                    fpRef.current = flatpickr(inputRef.current, {
+                        defaultDate: value,      // Initial value (dd/mm/yyyy)
+                        dateFormat: "d/m/Y",     // Format data is stored in
+                        altInput: true,          // Enable the "Pretty" display input
+                        altFormat: "d-M-Y",      // Format user sees: 06-apr-2020
+                        locale: "da",            // Danish locale (months in lowercase)
+                        allowInput: true,        // Allow manual typing
+                        onChange: (selectedDates, dateStr) => {
+                            // dateStr comes back in 'dateFormat' (d/m/Y), which is exactly what our app needs
+                            onChange(dateStr);
+                        }
+                    });
+                }
+                return () => {
+                    // Cleanup
+                    if (fpRef.current) fpRef.current.destroy();
+                };
+            }, []); // Run once on mount
+
+            // Sync external value changes if row is updated elsewhere
+            React.useEffect(() => {
+                if (fpRef.current && value) {
+                    fpRef.current.setDate(value, false); // false = do not trigger onChange
+                }
+            }, [value]);
+
+            return <input ref={inputRef} className="w-24 input-base p-1 rounded font-mono cursor-pointer" onKeyDown={onKeyDown} />;
+        };
+
+        // --- APP COMPONENT ---
+        function App() {
+            const [lastUpdate, setLastUpdate] = useState(null);
+            const [config, setConfig] = useState({
+                askAccount: '',
+                currencies: {},
+                hidden: []
+            });
+            const [rows, setRows] = useState([]);
+            const [view, setView] = useState('dashboard');
+            const [filterAccount, setFilterAccount] = useState('All');
+            const [taxYear, setTaxYear] = useState(new Date().getFullYear().toString());
+            const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+            const [marketData, setMarketData] = useState(() => JSON.parse(localStorage.getItem('marketDataCache') || '{}'));
+            const [settings, setSettings] = useState({ proxyUrl: 'https://corsproxy.io/?', married: true });
+            const [loading, setLoading] = useState(false);
+
+            const [ghConfig, setGhConfig] = useState({ owner: '', repo: 'portfolio', path: 'portfolio-data.csv', token: '' });
+            const [showSettings, setShowSettings] = useState(false);
+            const [statusMsg, setStatusMsg] = useState('');
+            const [fileSha, setFileSha] = useState(null);
+            const [schemaErrors, setSchemaErrors] = useState([]);
+
+            const [filters, setFilters] = useState({});
+            const [splitParams, setSplitParams] = useState({ ticker: '', num: 2, den: 1, dateIso: '', startDateIso: '', endDateIso: '' });
+            useEffect(() => {
+                const saved = localStorage.getItem('gh_config');
+                if (saved) setGhConfig(JSON.parse(saved));
+            }, []);
+
+            useEffect(() => {
+                if (ghConfig.token && ghConfig.repo && rows.length === 0) loadFromGithub();
+            }, [ghConfig]);
+
+            useEffect(() => { localStorage.setItem('marketDataCache', JSON.stringify(marketData)); }, [marketData]);
+
+            const txs = useMemo(() => rowsToTransactions(rows), [rows]);
+            const uniqueTickers = useMemo(() => [...new Set(txs.map(t => t.ticker).filter(t => t && !['DKK', 'USD', 'EUR', 'GBP', 'SEK', 'NOK'].includes(t)))], [txs]);
+            const accounts = useMemo(() => [...new Set(rows.map(r => r['Account']).filter(Boolean))].sort(), [rows]);
+            const years = useMemo(() => {
+                const yr = new Set(txs.map(t => t.date.getFullYear().toString()));
+                yr.add(new Date().getFullYear().toString()); // Always include current year
+                return [...yr].sort().reverse();
+            }, [txs]);
+
+            const fetchMarketData = async (silent = false) => {
+                if (!silent) setLoading(true); // Only show big spinner if user clicked button
+
+                const now = Math.floor(Date.now() / 1000);
+
+                // ... (Smart Start Date Logic - Keep as is) ...
+                let startTimestamp = now - (10 * 365 * 24 * 60 * 60);
+                if (txs.length > 0) {
+                    const firstTx = txs[0].date.getTime() / 1000;
+                    startTimestamp = Math.min(startTimestamp, firstTx - (30 * 24 * 60 * 60));
+                }
+
+                // ... (Identify Targets Logic - Keep as is) ...
+                const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
+                const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`)];
+
+                if (allTickers.length === 0) {
+                    if (!silent) setLoading(false);
+                    return;
+                }
+
+                const newMData = { ...marketData };
+
+                await Promise.all(allTickers.map(async (ticker) => {
+                    try {
+                        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(startTimestamp)}&period2=${now}&interval=1d&events=div`;
+                        const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
+                        const json = await res.json();
+
+                        if (json.chart?.result) {
+                            const result = json.chart.result[0];
+                            const meta = result.meta;
+                            const quotes = result.indicators.quote[0];
+                            const dates = result.timestamp;
+
+                            const cleanHistory = dates.map((t, i) => ({
+                                date: new Date(t * 1000).toISOString().split('T')[0],
+                                close: quotes.close[i]
+                            })).filter(x => x.close != null);
+
+                            const livePrice = meta.regularMarketPrice;
+                            let prevClose = livePrice;
+
+                            // Previous Close Logic (Keep as is)
+                            if (cleanHistory.length >= 2) {
+                                const lastCandle = cleanHistory[cleanHistory.length - 1];
+                                const secondLastCandle = cleanHistory[cleanHistory.length - 2];
+                                const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
+                                if (isLastCandleToday) prevClose = secondLastCandle.close;
+                                else prevClose = lastCandle.close;
+                            } else if (cleanHistory.length === 1) {
+                                prevClose = cleanHistory[0].close;
+                            }
+
+                            newMData[ticker] = {
+                                ...newMData[ticker],
+                                history: cleanHistory,
+                                instrumentType: meta.instrumentType,
+                                currency: meta.currency,
+                                price: livePrice,
+                                previousClose: prevClose,
+                                lastTradeTime: meta.regularMarketTime,
+                                lastUpdated: Date.now()
+                            };
+                        }
+                    } catch (e) { console.warn("Fetch failed", ticker); }
+                }));
+
+                setMarketData(newMData);
+                setLastUpdate(new Date()); // Update timestamp
+                if (!silent) setLoading(false);
+            };
+
+            //  Auto-fetch on App Load (once tickers are known)
+            useEffect(() => {
+                // If we have tickers but no data yet (or it's been > 5 seconds since mount), fetch.
+                if (uniqueTickers.length > 0 && !lastUpdate) {
+                    fetchMarketData(false); // Show loading spinner for first load
+                }
+            }, [uniqueTickers.length]); // Runs when data is imported/loaded
+
+            // Auto-refresh loop when on "Holdings" page
+            useEffect(() => {
+                let interval;
+                if (view === 'holdings') {
+                    // Fetch immediately if it's been more than 60s
+                    if (lastUpdate && (Date.now() - lastUpdate.getTime() > 60000)) {
+                        fetchMarketData(true);
+                    }
+
+                    // Set up 60s polling
+                    interval = setInterval(() => {
+                        fetchMarketData(true); // Silent update (background)
+                    }, 60000);
+                }
+                return () => clearInterval(interval);
+            }, [view, lastUpdate]); // Re-evaluates when view changes
+
+            // --- MASTER CALCULATION ENGINE ---
+            const calc = useMemo(() => {
+                let portfolio = {};
+                let reports = {};
+                let totalValueGraph = [];
+                let growthGraphData = [];
+
+                const etfKeys = new Set();
+                const askKeys = new Set();
+                const keyInfo = {};
+                const currencyMap = {};
+                const globalState = {};
+
+                // --- PRICE FINDER ---
+                const getPrice = (t, dStr) => {
+                    const m = marketData[t];
+                    if (m && m.history && m.history.length > 0) {
+                        const hit = m.history.find(h => h.date === dStr);
+                        if (hit) return hit.close;
+                        const prev = m.history.filter(h => h.date < dStr).pop();
+                        if (prev) return prev.close;
+                    }
+                    // Fallback: Use the last known transaction price for this ticker
+                    const relevantTxs = txs.filter(tx => tx.ticker === t && getLocalISO(tx.date) <= dStr);
+                    if (relevantTxs.length > 0) return relevantTxs[relevantTxs.length - 1].price;
+                    return 0;
+                };
+
+                const getFx = (c, dStr) => {
+                    if (!c || c === 'DKK') return 1;
+                    return getPrice(`${c}DKK=X`, dStr) || 1;
+                };
+
+                // Init Reports
+                years.forEach(y => {
+                    reports[y] = {
+                        rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0,
+                        withheldTax: 0, askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0,
+                        totalNormalTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] }
+                    };
+                });
+
+                // 1. Process Transactions (Tax Logic - Unchanged)
+                txs.forEach(tx => {
+                    const y = tx.date.getFullYear().toString();
+                    if (!reports[y]) reports[y] = { rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0, askGain: 0, askTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] } };
+
+                    const accountKey = `${tx.ticker}_${tx.account}`;
+                    const isASK = tx.account === config.askAccount;
+                    const globalTickerKey = tx.ticker;
+                    const isAssetETF = tx.assetType === 'ETF';
+
+                    if (isAssetETF && !isASK) {
+                        etfKeys.add(accountKey);
+                        keyInfo[accountKey] = { ticker: tx.ticker, account: tx.account, type: 'ETF' };
+                        if (tx.currency) currencyMap[accountKey] = tx.currency;
+                    }
+                    if (isASK) {
+                        askKeys.add(accountKey);
+                        keyInfo[accountKey] = { ticker: tx.ticker, account: tx.account, type: isAssetETF ? 'ETF' : 'Stock' };
+                        if (tx.currency) currencyMap[accountKey] = tx.currency;
+                    }
+
+                    if (!portfolio[accountKey]) portfolio[accountKey] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency };
+                    const pos = portfolio[accountKey];
+
+                    if (!isASK && !isAssetETF && !globalState[globalTickerKey]) {
+                        globalState[globalTickerKey] = { totalQty: 0, totalCostDKK: 0, avgPriceDKK: 0 };
+                    }
+                    const glob = globalState[globalTickerKey];
+
+                    const dStr = getLocalISO(tx.date);
+                    const valDKK = Math.abs(tx.qty) * tx.price * tx.fxRate;
+                    const accountCur = config.currencies[tx.account] || 'DKK';
+                    const accFx = getFx(accountCur, dStr);
+                    const commissionDKK = tx.commission * accFx;
+                    const taxDKK = tx.tax * accFx;
+
+                    if (tx.type === 'DIVIDEND') {
+                        const amtDKK = tx.qty * (tx.price || 1) * tx.fxRate;
+                        if (isASK) reports[y].askGain += amtDKK;
+                        else {
+                            if (tx.currency === 'DKK') reports[y].rubrik61 += amtDKK;
+                            else reports[y].rubrik63 += amtDKK;
+                            reports[y].withheldTax += taxDKK || 0;
+                            reports[y].breakdown.dividends.push({ date: getLocalISO(tx.date), ticker: tx.ticker, account: tx.account, amount: amtDKK, withheldTax: taxDKK || 0 });
+                        }
+                    }
+                    else if (tx.qty < 0 && (tx.assetType === 'Cash' || tx.type === 'TRANSFER' || !tx.ticker)) {
+                        const note = (tx.raw['Note'] || '').toLowerCase();
+                        const yearMatch = note.match(/(?:skat|tax).*?(\d{4})/);
+                        if (yearMatch) {
+                            const targetYear = yearMatch[1];
+                            if (reports[targetYear]) {
+                                const amount = Math.abs(tx.qty * tx.fxRate);
+                                if (tx.account === config.askAccount || note.includes('ask')) reports[targetYear].paidAskTax += amount;
+                                else reports[targetYear].paidTax += amount;
+                            }
+                        }
+                    }
+                    else if (tx.type === 'BUY') {
+                        pos.qty += tx.qty;
+                        const totalCostDKK = valDKK + commissionDKK;
+                        if (isASK || isAssetETF) {
+                            pos.cost += totalCostDKK;
+                            pos.avg = pos.qty ? pos.cost / pos.qty : 0;
+                        } else {
+                            glob.totalQty += tx.qty;
+                            glob.totalCostDKK += totalCostDKK;
+                            glob.avgPriceDKK = glob.totalQty ? glob.totalCostDKK / glob.totalQty : 0;
+                            pos.avg = glob.avgPriceDKK;
+                        }
+                    }
+                    else if (tx.type === 'SELL') {
+                        const proceeds = valDKK - commissionDKK;
+                        const sellQty = Math.abs(tx.qty);
+                        pos.qty -= sellQty;
+                        if (isASK || isAssetETF) {
+                            pos.cost -= (sellQty * pos.avg);
+                        } else {
+                            const costBasis = sellQty * glob.avgPriceDKK;
+                            const gain = proceeds - costBasis;
+                            glob.totalQty -= sellQty;
+                            glob.totalCostDKK -= costBasis;
+                            reports[y].rubrik66 += gain;
+                            reports[y].breakdown.stocks.push({ date: getLocalISO(tx.date), ticker: tx.ticker, account: tx.account, qty: sellQty, gain, costBasis, proceeds });
+                        }
+                    }
+                });
+
+                // 2. Inventory Loop (Tax Logic - Unchanged)
+                years.forEach(y => {
+                    const primoDate = `${y}-01-01`;
+                    const ultimoDate = `${y}-12-31`;
+                    const allInventoryKeys = new Set([...etfKeys, ...askKeys]);
+                    allInventoryKeys.forEach(key => {
+                        const { ticker, account } = keyInfo[key];
+                        const cur = currencyMap[key] || 'DKK';
+                        const isAccountASK = account === config.askAccount;
+                        let startQty = 0, endQty = 0, flows = 0, yearTransactions = [];
+                        txs.forEach(tx => {
+                            if (`${tx.ticker}_${tx.account}` !== key) return;
+                            const dStr = getLocalISO(tx.date);
+                            if (tx.type === 'BUY' || tx.type === 'SELL') {
+                                if (dStr < primoDate) startQty += tx.qty;
+                                if (dStr <= ultimoDate) endQty += tx.qty;
+                            }
+                            if (dStr >= primoDate && dStr <= ultimoDate && (tx.type === 'BUY' || tx.type === 'SELL')) {
+                                const valRaw = Math.abs(tx.qty * tx.price * tx.fxRate);
+                                const accCur = config.currencies[tx.account] || 'DKK';
+                                const costRaw = tx.commission * getFx(accCur, dStr);
+                                if (tx.type === 'BUY') { flows += (valRaw + costRaw); yearTransactions.push({ date: dStr, type: 'Køb', qty: Math.abs(tx.qty), amount: valRaw + costRaw }); }
+                                else { flows -= (valRaw - costRaw); yearTransactions.push({ date: dStr, type: 'Salg', qty: Math.abs(tx.qty), amount: valRaw - costRaw }); }
+                            }
+                        });
+                        const primoVal = startQty * getPrice(ticker, primoDate) * getFx(cur, primoDate);
+                        const ultimoVal = endQty * getPrice(ticker, ultimoDate) * getFx(cur, ultimoDate);
+                        const gain = ultimoVal - primoVal - flows;
+                        if (primoVal !== 0 || ultimoVal !== 0 || flows !== 0) {
+                            if (isAccountASK) reports[y].askGain += gain;
+                            else {
+                                reports[y].rubrik38 += gain;
+                                reports[y].breakdown.etfs.push({ ticker, account, gain, primoQty: startQty, primoVal, ultimoQty: endQty, ultimoVal, netFlows: flows, transactions: yearTransactions });
+                            }
+                        }
+                    });
+                    reports[y].askTax = Math.max(0, reports[y].askGain * 0.17);
+                    const r = reports[y];
+                    const shareIncome = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
+                    const limit = (TAX_LIMITS[y]) * (settings.married ? 2 : 1);
+                    let normalTax = 0;
+                    if (shareIncome > 0) normalTax = (shareIncome <= limit) ? shareIncome * 0.27 : (limit * 0.27) + ((shareIncome - limit) * 0.42);
+                    if (r.rubrik345 > 0) normalTax += r.rubrik345 * 0.42;
+                    reports[y].totalNormalTax = normalTax;
+                });
+
+                // 3. Current Values
+                let currentVal = 0;
+                let costBasisTotal = 0;
+                let unrealizedRubrik66Gain = 0;
+                const todayStr = getLocalISO(new Date());
+                const currentYear = new Date().getFullYear().toString();
+
+                Object.values(portfolio).forEach(p => {
+                    if (Math.abs(p.qty) < 0.01) return;
+                    const price = getPrice(p.ticker, todayStr);
+                    const fx = getFx(p.cur, todayStr);
+                    const val = p.qty * price * fx;
+                    currentVal += val;
+                    costBasisTotal += (p.qty * p.avg);
+                    const pKey = `${p.ticker}_${p.acc}`;
+                    const pType = keyInfo[pKey]?.type || 'Stock';
+                    const isASK = p.acc === config.askAccount;
+                    if (!isASK && pType === 'Stock') unrealizedRubrik66Gain += (val - (p.qty * p.avg));
+                });
+
+                const ytd = reports[currentYear] || { rubrik66: 0, rubrik38: 0, rubrik61: 0, rubrik63: 0, rubrik345: 0, askGain: 0, paidTax: 0, paidAskTax: 0, withheldTax: 0, totalNormalTax: 0 };
+                const totalAskGain = ytd.askGain || 0;
+                const totalAskBill = Math.max(0, totalAskGain * 0.17);
+                const liquidationAskTax = Math.max(0, totalAskBill - (ytd.paidAskTax || 0));
+                const totalShareIncome = (ytd.rubrik66 || 0) + (ytd.rubrik38 || 0) + (ytd.rubrik61 || 0) + (ytd.rubrik63 || 0) + unrealizedRubrik66Gain;
+                const taxLimit = (TAX_LIMITS[currentYear] || 61000) * (settings.married ? 2 : 1);
+                let taxOnTotal = 0;
+                if (totalShareIncome > 0) taxOnTotal = (totalShareIncome <= taxLimit) ? totalShareIncome * 0.27 : (taxLimit * 0.27) + ((totalShareIncome - taxLimit) * 0.42);
+                taxOnTotal += ((ytd.rubrik345 || 0) * 0.42);
+                const liquidationNormalTax = Math.max(0, taxOnTotal - (ytd.totalNormalTax || 0));
+                const currentTax = liquidationAskTax + liquidationNormalTax;
+
+                // 4. Graph & Yearly Stats (INVESTED CAPITAL MODEL)
+                // We track "Invested Assets" separately from "Bank Cash".
+                // Graph Value = Value of Stocks/ETFs (Always >= 0)
+                // Graph Flow  = Money entering market (Buy) or leaving (Sell/Div)
+                let yearlyStats = [];
+                if (txs.length > 0) {
+                    const timeTxs = [...txs].sort((a, b) => a.date - b.date);
+                    let d = new Date(timeTxs[0].date);
+                    const now = new Date();
+                    const historyPortfolio = {};
+                    let txCursor = 0;
+                    let twrMultiplier = 1.0;
+                    let prevDayValue = 0;
+
+                    totalValueGraph.push({ date: getLocalISO(d), value: 0 });
+                    const zeroDate = new Date(d);
+                    zeroDate.setDate(d.getDate() - 1);
+                    growthGraphData.push({ date: getLocalISO(zeroDate), value: 0 });
+
+                    while (d <= now) {
+                        const dStr = getLocalISO(d);
+                        let dayInvestedFlow = 0; // Net flow INTO the asset bucket
+
+                        while (txCursor < timeTxs.length && timeTxs[txCursor].date <= d) {
+                            const tx = timeTxs[txCursor];
+                            const key = `${tx.ticker}_${tx.account}`;
+                            const accCur = config.currencies[tx.account] || 'DKK';
+                            const accFx = getFx(accCur, dStr);
+
+                            if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
+                                if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cur: tx.currency, ticker: tx.ticker };
+                                const p = historyPortfolio[key];
+
+                                const tradeValDKK = (Math.abs(tx.qty) * tx.price * tx.fxRate);
+                                const commDKK = (tx.commission * accFx);
+
+                                if (tx.type === 'BUY') {
+                                    p.qty += tx.qty;
+                                    // Flow In = Cost of Trade (Price + Comm)
+                                    dayInvestedFlow += (tradeValDKK + commDKK);
+                                }
+                                else if (tx.type === 'SELL') {
+                                    p.qty -= Math.abs(tx.qty);
+                                    // Flow Out = Proceeds (Price - Comm) - Negative Flow
+                                    dayInvestedFlow -= (tradeValDKK - commDKK);
+                                }
+                            }
+                            else if (tx.type === 'DIVIDEND') {
+                                // Dividend is money leaving the "Stock" bucket -> Negative Flow
+                                const divValDKK = (tx.qty * (tx.price || 1) * tx.fxRate);
+                                const taxDKK = (tx.tax * accFx);
+                                dayInvestedFlow -= (divValDKK - taxDKK);
+                            }
+                            // Note: We IGNORE 'Cash' type rows for the GRAPH flow to prevent negative portfolio values.
+                            // We only care about money entering/leaving the "Asset" bucket.
+
+                            txCursor++;
+                        }
+
+                        let dayAssetValue = 0;
+                        for (const key in historyPortfolio) {
+                            const pos = historyPortfolio[key];
+                            if (pos.qty > 0.0001) {
+                                const price = getPrice(pos.ticker, dStr);
+                                const fx = getFx(pos.cur, dStr);
+                                if (price) dayAssetValue += (pos.qty * price * fx);
+                            }
+                        }
+
+                        // TWR Calc on ASSETS ONLY
+                        // Adjusted Basis = StartValue + (NetFlows * 0.5)
+                        const adjustedBasis = prevDayValue + (dayInvestedFlow * 0.5);
+                        const dailyGain = dayAssetValue - prevDayValue - dayInvestedFlow;
+
+                        if (adjustedBasis > 1) { // Prevent div/0
+                            twrMultiplier = twrMultiplier * (1 + (dailyGain / adjustedBasis));
+                        }
+
+                        prevDayValue = dayAssetValue;
+
+                        if (twrMultiplier !== 1 || dayAssetValue > 0) {
+                            totalValueGraph.push({ date: dStr, value: dayAssetValue });
+                            growthGraphData.push({ date: dStr, value: (twrMultiplier - 1) * 100 });
+                        }
+                        d.setDate(d.getDate() + 1);
+                    }
+
+                    // --- YEARLY STATS CALCULATION ---
+                    if (totalValueGraph.length > 0) {
+                        const firstYear = parseInt(totalValueGraph[0].date.slice(0, 4), 10);
+                        const lastYear = parseInt(totalValueGraph[totalValueGraph.length - 1].date.slice(0, 4), 10);
+                        const nearest = (target, dataset) => dataset.find(p => p.date >= target);
+
+                        for (let y = lastYear; y >= firstYear; y--) {
+                            // A. TWR Return (Asset Based)
+                            const startNode = nearest(`${y}-01-01`, growthGraphData);
+                            let endNode = nearest(`${y}-12-31`, growthGraphData);
+                            if (y === new Date().getFullYear()) endNode = growthGraphData[growthGraphData.length - 1];
+                            else if (!endNode) {
+                                const yearData = growthGraphData.filter(p => p.date.startsWith(y.toString()));
+                                if (yearData.length) endNode = yearData[yearData.length - 1];
+                            }
+
+                            let yearReturn = 0;
+                            if (startNode && endNode) {
+                                const startMult = 1 + (startNode.value / 100);
+                                const endMult = 1 + (endNode.value / 100);
+                                yearReturn = ((endMult / startMult) - 1) * 100;
+                            }
+
+                            // B. Gain (Asset Based)
+                            // Gain = (EndAsset - StartAsset) - (NetInvested)
+                            let vStart = 0;
+                            let vEnd = 0;
+
+                            const prevYearEnd = nearest(`${y - 1}-12-31`, totalValueGraph);
+                            if (prevYearEnd) vStart = prevYearEnd.value;
+                            else {
+                                const prevYearData = totalValueGraph.filter(p => p.date.startsWith((y - 1).toString()));
+                                if (prevYearData.length) vStart = prevYearData[prevYearData.length - 1].value;
+                            }
+
+                            const currYearEnd = nearest(`${y}-12-31`, totalValueGraph);
+                            if (currYearEnd) vEnd = currYearEnd.value;
+                            else if (y === new Date().getFullYear()) vEnd = totalValueGraph[totalValueGraph.length - 1].value;
+                            else {
+                                const curYearData = totalValueGraph.filter(p => p.date.startsWith(y.toString()));
+                                if (curYearData.length) vEnd = curYearData[curYearData.length - 1].value;
+                            }
+
+                            // Calc Asset Flows for this year
+                            let netInvested = 0;
+                            txs.forEach(tx => {
+                                if (tx.date.getFullYear() === y) {
+                                    const accCur = config.currencies[tx.account] || 'DKK';
+                                    const accFx = getFx(accCur, getLocalISO(tx.date));
+
+                                    if (tx.type === 'BUY') {
+                                        netInvested += (Math.abs(tx.qty) * tx.price * tx.fxRate) + (tx.commission * accFx);
+                                    } else if (tx.type === 'SELL') {
+                                        netInvested -= ((Math.abs(tx.qty) * tx.price * tx.fxRate) - (tx.commission * accFx));
+                                    } else if (tx.type === 'DIVIDEND') {
+                                        netInvested -= ((tx.qty * (tx.price || 1) * tx.fxRate) - (tx.tax * accFx));
+                                    }
+                                }
+                            });
+
+                            const gainAbs = vEnd - vStart - netInvested;
+
+                            // C. Net Capital Flow (Bank Transfers)
+                            // This tracks the CSV "Cash" rows purely for display in the table
+                            let bankFlow = 0;
+                            let flowIn = 0;
+                            let flowOut = 0;
+                            txs.forEach(tx => {
+                                if (tx.date.getFullYear() === y) {
+                                    // Only count explicit Cash Transfer/Deposit rows
+                                    if (tx.assetType === 'Cash' && tx.type !== 'DIVIDEND' && tx.type !== 'INTEREST') {
+                                        const val = (tx.qty * tx.fxRate);
+                                        bankFlow += val;
+                                        if (val > 0) flowIn += val;
+                                        else flowOut += val;
+                                    }
+                                }
+                            });
+
+                            yearlyStats.push({
+                                year: y,
+                                return: yearReturn,
+                                flow: bankFlow, // Show the User's Bank Transfers
+                                gainAbs: gainAbs, // Show the Asset Performance
+                                breakdown: { in: flowIn, out: flowOut }
+                            });
+                        }
+                    }
+                }
+
+                return { portfolio, reports, totalValueGraph, growthGraphData, currentVal, currentTax, costBasisTotal, liquidationAskTax, liquidationNormalTax, unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats };
+            }, [txs, marketData, settings]);
+
+            // 2. HOLDINGS
+            const renderHoldings = () => {
+                const list = Object.values(calc.portfolio).filter(p => Math.abs(p.qty) > 0.01);
+                const nowSec = Math.floor(Date.now() / 1000);
+
+                // --- CALCULATE TOTALS ---
+                let totalVal = 0;
+                let totalCost = 0;
+                let totalDayGain = 0;
+                let totalPrevVal = 0; // Needed to calculate weighted Day %
+
+                list.forEach(p => {
+                    const m = marketData[p.ticker] || {};
+                    const price = m.price || 0;
+                    const fxM = marketData[`${p.cur}DKK=X`];
+                    const fxRate = fxM?.price || 1;
+
+                    // Row Values
+                    const val = p.qty * price * fxRate;
+                    const cost = p.qty * p.avg;
+
+                    // Row Daily Gain
+                    const prevClose = m.previousClose || price;
+                    let dailyGainVal = 0;
+
+                    if (price > 0 && prevClose > 0) {
+                        const dailyDiff = price - prevClose;
+                        dailyGainVal = dailyDiff * p.qty * fxRate;
+                    }
+
+                    totalVal += val;
+                    totalCost += cost;
+                    totalDayGain += dailyGainVal;
+                    // Previous Value = Current Value - Daily Gain
+                    // We sum this up to get the denominator for the Total Day %
+                    totalPrevVal += (val - dailyGainVal);
+                });
+
+                const totalUnrealized = totalVal - totalCost;
+                const totalUnrealizedPct = totalCost > 0 ? (totalUnrealized / totalCost) * 100 : 0;
+                const totalDayPct = totalPrevVal > 0 ? (totalDayGain / totalPrevVal) * 100 : 0;
+
+                return (
+                    <div className="p-6 md:p-8 relative">
+                        <div className="card">
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                                        <tr>
+                                            <th className="px-4 py-3">Ticker</th>
+                                            <th className="px-4 py-3 text-right">Antal</th>
+                                            <th className="px-4 py-3 text-right">Pris</th>
+                                            <th className="px-4 py-3 text-right">Dagsgevinst</th>
+                                            <th className="px-4 py-3 text-right">Dag %</th>
+                                            <th className="px-4 py-3 text-right">Værdi</th>
+                                            <th className="px-4 py-3 text-right">Kostpris</th>
+                                            <th className="px-4 py-3 text-right">Urealiseret</th>
+                                            <th className="px-4 py-3 text-right">Konto</th>
+                                        </tr>
+                                    </thead>
+                                    {/* TOTALS ROW ABOVE TICKERS */}
+                                    <tbody>
+                                        <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold text-gray-800">
+                                            <td className="px-4 py-3">Total</td>
+                                            <td className="px-4 py-3 text-right"></td>
+                                            <td className="px-4 py-3 text-right"></td>
+                                            <td className={`px-4 py-3 text-right ${totalDayGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalDayGain)}</td>
+                                            <td className={`px-4 py-3 text-right ${totalDayPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatNumber2(totalDayPct)}%</td>
+                                            <td className="px-4 py-3 text-right">{formatCurrency(totalVal)}</td>
+                                            <td className={`px-4 py-3 text-right ${totalUnrealized >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalUnrealized)}</td>
+                                            <td className={`px-4 py-3 text-right ${totalUnrealized >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatNumber2(totalUnrealizedPct)}%</td>
+                                        </tr>
+                                    </tbody>
+                                    <tbody className="divide-y">
+                                        {list.map(p => {
+                                            const m = marketData[p.ticker] || {};
+                                            const price = m.price || 0;
+                                            const fxM = marketData[`${p.cur}DKK=X`];
+                                            const fxRate = fxM?.price || 1;
+                                            const val = p.qty * price * fxRate;
+                                            const gain = val - (p.qty * p.avg);
+                                            const costBasis = (p.qty * p.avg);
+                                            const pct = costBasis > 0 ? (gain / costBasis) * 100 : null;
+                                            const lastTrade = m.lastTradeTime || 0;
+                                            const diffSeconds = nowSec - lastTrade;
+                                            const isMarketOpen = lastTrade > 0 && diffSeconds < 2700;
+                                            const prevClose = m.previousClose || price;
+                                            let dailyDiff = 0;
+                                            let dailyGainVal = 0;
+                                            let dailyPct = 0;
+                                            let debugTitle = "No Data";
+
+                                            if (price > 0 && prevClose > 0) {
+                                                dailyDiff = price - prevClose;
+                                                dailyGainVal = dailyDiff * p.qty * fxRate;
+                                                dailyPct = (dailyDiff / prevClose) * 100;
+                                                debugTitle = `Live: ${price}\nPrev: ${prevClose}\nDiff: ${dailyDiff.toFixed(2)}`;
+                                            }
+
+                                            return (
+                                                <tr key={p.ticker + p.acc} className="hover:bg-gray-50">
+                                                    <td className="px-4 py-3 font-medium text-gray-900 flex items-center gap-2">
+                                                        <span
+                                                            className={`w-2.5 h-2.5 rounded-full ${isMarketOpen ? 'bg-green-500 animate-pulse shadow-[0_0_5px_rgba(34,197,94,0.6)]' : 'bg-gray-300'}`}
+                                                            title={isMarketOpen ? `Active (${Math.floor(diffSeconds / 60)}m ago)` : `Closed (${Math.floor(diffSeconds / 3600)}h ago)`}
+                                                        ></span>
+                                                        {p.ticker}
+                                                        <span className="text-gray-400 text-xs font-normal">({p.acc})</span>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right">{formatDanishNumber(p.qty, 10)}</td>
+                                                    <td className="px-4 py-3 text-right font-mono font-medium text-blue-700">
+                                                        {price > 0 ?
+                                                            <span>{formatNumber2(price)} <span className="text-xs text-gray-400">{p.cur}</span></span>
+                                                            : <span className="text-red-300 text-xs">...</span>
+                                                        }
+                                                    </td>
+                                                    <td className={`px-4 py-3 text-right font-medium ${dailyGainVal >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                        {price > 0 ? formatCurrency(dailyGainVal) : '-'}
+                                                    </td>
+                                                    <td
+                                                        className={`px-4 py-3 text-right border-b border-dotted border-gray-300 cursor-help ${dailyPct >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                                                        title={debugTitle}
+                                                    >
+                                                        {price > 0 ? `${formatNumber2(dailyPct)}%` : '-'}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-bold">{formatCurrency(val)}</td>
+                                                    <td className={`px-4 py-3 text-right ${gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(gain)}</td>
+                                                    <td className={`px-4 py-3 text-right ${gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{pct === null ? '—' : `${formatNumber2(pct)}%`}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {/* Last Update Indicator OUTSIDE card, bottom right */}
+                        <div className="absolute right-6 bottom-2 md:right-8 md:bottom-4 flex items-center gap-2 text-xs font-mono bg-gray-50 px-2 py-1 rounded border border-gray-100 shadow">
+                            {loading ? (
+                                <>
+                                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping"></span>
+                                    <span className="text-blue-600 font-medium">Opdaterer...</span>
+                                </>
+                            ) : (
+                                <span className="text-gray-400">
+                                    Sidst opdateret: {lastUpdate ? lastUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Aldrig'}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            // --- SPLIT DETECTIVE (Automated Scanner) ---
+            const splitCandidates = useMemo(() => {
+                const candidates = [];
+                // Only look at "Buy" trades for Stocks/ETFs
+                const buys = txs.filter(t => (t.type === 'BUY') && marketData[t.ticker] && marketData[t.ticker].history);
+
+                buys.forEach(tx => {
+                    const mData = marketData[tx.ticker];
+                    const dStr = getLocalISO(tx.date);
+
+                    // Find market close for that specific date (or closest before)
+                    // We use the raw close price from Yahoo (which is split-adjusted)
+                    const hit = mData.history.find(h => h.date === dStr) || mData.history.filter(h => h.date < dStr).pop();
+                    if (!hit) return;
+
+                    // Calculate Ratio: Your Price / Current Yahoo Historical Price
+                    // Example: You paid 800. Yahoo says history is 80. Ratio is 10.
+                    const ratio = tx.price / hit.close;
+
+                    // Threshold: If deviation is significant (> 1.8x), it's likely a forward split
+                    if (ratio > 1.8) {
+                        const likelyRatio = Math.round(ratio); // e.g. 9.8 -> 10
+
+                        // Check if we already have this ticker in the list to avoid duplicates
+                        const exists = candidates.find(c => c.ticker === tx.ticker);
+
+                        // Only add if it's a "clean" integer ratio (like 2, 3, 4, 10, 20) indicating a split
+                        // or fairly close to one.
+                        if (!exists && likelyRatio > 1) {
+                            candidates.push({
+                                ticker: tx.ticker,
+                                date: dStr,
+                                yourPrice: tx.price,
+                                marketPrice: hit.close,
+                                suggestedNum: likelyRatio,
+                                suggestedDen: 1,
+                                ratio: ratio
+                            });
+                        }
+                    }
+                });
+                return candidates.sort((a, b) => b.ratio - a.ratio);
+            }, [txs, marketData]);
+
+            // --- VIEW RENDERERS ---
+            const renderTaxReport = () => {
+                const r = calc.reports[taxYear] || { rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0, askGain: 0, breakdown: { stocks: [], etfs: [], dividends: [] } };
+
+                const shareIncome = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
+                const limit = TAX_LIMITS[taxYear] * (settings.married ? 2 : 1);
+                let taxBill = 0;
+                if (shareIncome > 0) {
+                    taxBill = (shareIncome <= limit) ? shareIncome * 0.27 : (limit * 0.27) + ((shareIncome - limit) * 0.42);
+                }
+                if (r.rubrik345 > 0) taxBill += r.rubrik345 * 0.42;
+                const taxToPay = Math.max(0, taxBill - r.withheldTax - (r.paidTax || 0));
+                const askTaxToPay = Math.max(0, (r.askTax || 0) - (r.paidAskTax || 0));
+
+                const currentYearStr = new Date().getFullYear().toString();
+                const latestYear = (years && years.length > 0) ? years[0] : currentYearStr;
+                const isLatest = taxYear === latestYear;
+
+                return (
+                    <div className="p-6 md:p-8 space-y-6">
+                        <div className="card">
+                            <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><i className="ph ph-file-text"></i> Skatterapport ({taxYear})</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+                                <div className="space-y-4">
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                                        <span className="text-gray-600">Gevinst/tab aktier (Rubrik 66)</span>
+                                        <span className="font-mono font-medium">{formatCurrency(r.rubrik66)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                                        <span className="text-gray-600">Gevinst/tab ETF (Aktieindkomst/Lager)</span>
+                                        <span className="font-mono font-medium">{formatCurrency(r.rubrik38)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                                        <span className="text-gray-600">Udbytte DK (Rubrik 61)</span>
+                                        <span className="font-mono font-medium">{formatCurrency(r.rubrik61)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2">
+                                        <span className="text-gray-600">Udbytte Udland (Rubrik 63)</span>
+                                        <span className="font-mono font-medium">{formatCurrency(r.rubrik63)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center border-b border-gray-100 pb-2 text-gray-400">
+                                        <span className="text-gray-400">Inv. selskaber (Kapitalindkomst/R345)</span>
+                                        <span className="font-mono font-medium">{formatCurrency(r.rubrik345)}</span>
+                                    </div>
+                                </div>
+                                <div className="bg-gray-50 p-4 rounded-lg space-y-3">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-gray-700">Samlet aktieindkomst</span>
+                                        <span className="font-bold text-gray-900">{formatCurrency(shareIncome)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-sm text-gray-500">
+                                        <span>Beregnet skat</span>
+                                        <span>{formatCurrency(taxBill)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-sm text-green-600">
+                                        <span>Betalt udbytteskat</span>
+                                        <span>-{formatCurrency(r.withheldTax)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-sm text-green-600">
+                                        <span>Betalt normal skat</span>
+                                        <span>-{formatCurrency(r.paidTax || 0)}</span>
+                                    </div>
+                                    <div className="border-t border-gray-200 pt-2 flex justify-between items-center">
+                                        <span className="font-bold text-blue-700">Skat til betaling</span>
+                                        <span className="font-bold text-xl text-blue-700">{formatCurrency(taxToPay)}</span>
+                                    </div>
+                                    {isLatest && (
+                                        <div className="mt-4 pt-3 border-t border-gray-200 space-y-1">
+                                            <div className="flex justify-between items-center">
+                                                <span className="font-bold text-gray-700">Hypotetisk likvidationsskat (nu)</span>
+                                                <span className="font-bold text-purple-700">{formatCurrency(calc.currentTax)}</span>
+                                            </div>
+                                            <div className="text-[11px] text-gray-500">
+                                                Normal: {formatCurrency(calc.liquidationNormalTax)} · ASK: {formatCurrency(calc.liquidationAskTax)}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* ASK Overview */}
+                                    <div className="mt-4 pt-3 border-t border-gray-200 space-y-2">
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-bold text-gray-700">ASK gevinst</span>
+                                            <span className={`font-bold ${(r.askGain || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(r.askGain || 0)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center text-sm text-gray-500">
+                                            <span>ASK beregnet skat (17%)</span>
+                                            <span>{formatCurrency(r.askTax || 0)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center text-sm text-green-600">
+                                            <span>Betalt ASK skat</span>
+                                            <span>-{formatCurrency(r.paidAskTax || 0)}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-bold text-orange-700">ASK skat til betaling</span>
+                                            <span className="font-bold text-xl text-orange-700">{formatCurrency(askTaxToPay)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="card">
+                            <h4 className="font-bold text-md mb-3 flex items-center gap-2"><i className="ph ph-list-magnifying-glass"></i> Details for {taxYear}</h4>
+                            <div className="grid grid-cols-1 gap-6">
+
+                                {/* STOCKS TABLE (Rubrik 66) */}
+                                <div className="bg-white border rounded p-4">
+                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">Stocks Sold — Rubrik 66</h5>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-xs text-left">
+                                            <thead className="bg-gray-50 border-b">
+                                                <tr>
+                                                    <th className="px-3 py-2">Date</th>
+                                                    <th className="px-3 py-2">Ticker</th>
+                                                    <th className="px-3 py-2 text-right">Qty</th>
+                                                    <th className="px-3 py-2 text-right">Cost Basis</th>
+                                                    <th className="px-3 py-2 text-right">Proceeds</th>
+                                                    <th className="px-3 py-2 text-right">Gain</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {(r.breakdown?.stocks || []).length === 0 && <tr><td className="px-3 py-3 text-gray-400 italic" colSpan="6">No stock sales</td></tr>}
+                                                {(r.breakdown?.stocks || []).map((s, i) => (
+                                                    <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
+                                                        <td className="px-3 py-2">{s.date}</td>
+                                                        <td className="px-3 py-2 font-medium">{s.ticker} <span className="text-gray-400 font-normal">({s.account})</span></td>
+                                                        <td className="px-3 py-2 text-right">{formatNumber2(s.qty)}</td>
+                                                        <td className="px-3 py-2 text-right">{formatCurrency(s.costBasis)}</td>
+                                                        <td className="px-3 py-2 text-right">{formatCurrency(s.proceeds)}</td>
+                                                        <td className={`px-3 py-2 text-right font-bold ${s.gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(s.gain)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+
+                                {/* ETF DETAILS (Rubrik 38) */}
+                                <div className="bg-white border rounded p-4">
+                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">ETF Inventory Details — Rubrik 38</h5>
+                                    <div className="space-y-6">
+                                        {(r.breakdown?.etfs || []).length === 0 && <p className="text-sm text-gray-400 italic">No ETFs taxed this year.</p>}
+                                        {(r.breakdown?.etfs || []).map((e, i) => (
+                                            <div key={i} className="border rounded-lg overflow-hidden text-sm">
+                                                {/* Header */}
+                                                <div className="bg-gray-50 px-4 py-2 border-b flex justify-between items-center">
+                                                    <span className="font-bold text-gray-800">{e.ticker} <span className="text-gray-500 font-normal">({e.account})</span></span>
+                                                    <span className={`font-bold ${e.gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>Gain: {formatCurrency(e.gain)}</span>
+                                                </div>
+
+                                                <div className="p-0">
+                                                    <table className="w-full text-xs">
+                                                        <tbody>
+                                                            {/* Primo */}
+                                                            <tr className="bg-blue-50/30">
+                                                                <td className="px-4 py-2 w-24 font-semibold text-gray-600">Primo</td>
+                                                                <td className="px-4 py-2 text-gray-500">Jan 1 Holdings</td>
+                                                                <td className="px-4 py-2 text-right font-mono">{formatNumber2(e.primoQty)} stk</td>
+                                                                <td className="px-4 py-2 text-right font-mono">{formatCurrency(e.primoVal)}</td>
+                                                            </tr>
+
+                                                            {/* Transactions Loop */}
+                                                            {e.transactions.length > 0 ? (
+                                                                e.transactions.map((tx, txi) => (
+                                                                    <tr key={txi} className="border-t border-b border-gray-100 hover:bg-gray-50">
+                                                                        <td className="px-4 py-2 text-gray-500">{tx.date}</td>
+                                                                        <td className="px-4 py-2 font-medium">{tx.type}</td>
+                                                                        <td className="px-4 py-2 text-right">{formatNumber2(tx.qty)} stk</td>
+                                                                        <td className="px-4 py-2 text-right text-gray-600">
+                                                                            {tx.type === 'Køb' ? 'Købesum: ' : 'Salgssum: '}
+                                                                            {formatCurrency(tx.amount)}
+                                                                        </td>
+                                                                    </tr>
+                                                                ))
+                                                            ) : (
+                                                                <tr className="border-t border-b border-gray-100">
+                                                                    <td colSpan="4" className="px-4 py-2 text-center text-gray-400 italic">No transactions this year</td>
+                                                                </tr>
+                                                            )}
+
+                                                            {/* Ultimo */}
+                                                            <tr className="bg-blue-50/30 font-semibold border-b">
+                                                                <td className="px-4 py-2 text-gray-600">Ultimo</td>
+                                                                <td className="px-4 py-2 text-gray-500">Dec 31 Holdings</td>
+                                                                <td className="px-4 py-2 text-right font-mono">{formatNumber2(e.ultimoQty)} stk</td>
+                                                                <td className="px-4 py-2 text-right font-mono">{formatCurrency(e.ultimoVal)}</td>
+                                                            </tr>
+
+                                                            {/* Calculation Footer */}
+                                                            <tr className="bg-gray-50 text-gray-500">
+                                                                <td colSpan="4" className="px-4 py-2 text-right text-[10px]">
+                                                                    Calculation: {formatCurrency(e.ultimoVal)} (Ultimo) - {formatCurrency(e.primoVal)} (Primo) - {formatCurrency(e.netFlows)} (Net Purchases) = <strong>{formatCurrency(e.gain)}</strong>
+                                                                </td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* ASK / PENSION TAX DETAILS */}
+                                {(r.askGain !== 0 || r.askTax !== 0) && (
+                                    <div className="bg-white border rounded p-4">
+                                        <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">ASK (17%)</h5>
+                                        <div className="overflow-x-auto border rounded">
+                                            <table className="w-full text-xs text-left">
+                                                <thead className="bg-gray-50 border-b">
+                                                    <tr>
+                                                        <th className="px-3 py-2">Account Type</th>
+                                                        <th className="px-3 py-2 text-right">Total Gain (DKK)</th>
+                                                        <th className="px-3 py-2 text-right">Tax Rate</th>
+                                                        <th className="px-3 py-2 text-right">Calculated Tax</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr className="border-b last:border-0 hover:bg-gray-50">
+                                                        <td className="px-3 py-2 font-medium">Aktiesparekonto (ASK)</td>
+                                                        <td className={`px-3 py-2 text-right font-mono ${r.askGain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                            {formatCurrency(r.askGain)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right text-gray-500">17%</td>
+                                                        <td className="px-3 py-2 text-right font-bold text-gray-800">
+                                                            {formatCurrency(r.askTax)}
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                                <tfoot className="bg-gray-50 text-gray-500">
+                                                    <tr>
+                                                        <td colSpan="4" className="px-3 py-2 text-[10px] text-right italic">
+                                                            Note: This tax is typically withdrawn automatically from the ASK account in January/February of the following year.
+                                                        </td>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* DIVIDENDS TABLE */}
+                                <div className="bg-white border rounded p-4">
+                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">Dividends — Rubrik 61/63</h5>
+                                    <div className="overflow-auto max-h-72 custom-scrollbar border rounded">
+                                        <table className="w-full text-xs text-left">
+                                            <thead className="bg-gray-50 sticky top-0">
+                                                <tr>
+                                                    <th className="px-3 py-2">Date</th>
+                                                    <th className="px-3 py-2">Ticker</th>
+                                                    <th className="px-3 py-2 text-right">Amount</th>
+                                                    <th className="px-3 py-2 text-right">Tax Withheld</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y">
+                                                {(r.breakdown?.dividends || []).length === 0 && <tr><td className="px-3 py-3 text-gray-400 italic" colSpan="4">No dividends</td></tr>}
+                                                {(r.breakdown?.dividends || []).map((d, i) => (
+                                                    <tr key={i} className="hover:bg-gray-50">
+                                                        <td className="px-3 py-2">{d.date}</td>
+                                                        <td className="px-3 py-2 font-medium">{d.ticker} <span className="text-gray-400 font-normal">({d.account})</span></td>
+                                                        <td className="px-3 py-2 text-right">{formatCurrency(d.amount)}</td>
+                                                        <td className="px-3 py-2 text-right">{formatCurrency(d.withheldTax)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            // 1. DASHBOARD
+            const renderDashboard = () => {
+                const historicalGain = Object.values(calc.reports).reduce((acc, r) => acc + (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik345 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0) + (r.askGain || 0), 0);
+                const allTimeGain = historicalGain + (calc.unrealizedStockGain || 0);
+
+                const currentYearReport = calc.reports[new Date().getFullYear().toString()] || {};
+
+                // Axis Ticks Logic
+                const series = calc.totalValueGraph || [];
+                const firstDate = series.length ? series[0].date : null;
+                const lastDate = series.length ? series[series.length - 1].date : null;
+                const firstYear = firstDate ? parseInt(firstDate.slice(0, 4), 10) : null;
+                const lastYear = lastDate ? parseInt(lastDate.slice(0, 4), 10) : null;
+
+                const nearestOnOrAfter = (target, dataset) => {
+                    const hit = dataset.find(p => p.date >= target);
+                    return hit ? hit : null;
+                };
+
+                const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+                let yearTicks = [];
+                if (firstYear != null && lastYear != null) {
+                    for (let y = firstYear; y <= lastYear; y++) yearTicks.push(nearestOnOrAfter(`${y}-01-01`, series)?.date);
+                    yearTicks = uniq(yearTicks);
+                }
+
+                return (
+                    <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
+
+                        {/* 1. TOP CARDS */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-6">
+                            {/* Value */}
+                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                                <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <i className="ph ph-wallet"></i> Aktuel værdi
+                                </div>
+                                <div className="mt-2">
+                                    <div className="text-3xl font-bold text-gray-900 tracking-tight break-words" style={{ wordBreak: 'break-word' }}>{formatCurrencyNoDecimals(calc.currentVal)}</div>
+                                    <div className="text-xs text-gray-400 mt-1 font-medium">Portefølje Brutto</div>
+                                </div>
+                            </div>
+                            {/* Liquidation */}
+                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                                <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <i className="ph ph-bank"></i> Likvidationsværdi
+                                </div>
+                                <div className="mt-2">
+                                    <div className="text-3xl font-bold text-gray-900 tracking-tight break-words" style={{ wordBreak: 'break-word' }}>{formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}</div>
+                                    <div className="text-xs text-gray-400 mt-1 font-medium">Netto efter {formatCurrencyNoDecimals(calc.currentTax)} skat</div>
+                                </div>
+                            </div>
+                            {/* All Time Gain */}
+                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                                <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <i className="ph ph-trend-up"></i> Samlet gevinst
+                                </div>
+                                <div className="mt-2">
+                                    <div className={`text-3xl font-bold tracking-tight ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'} break-words`} style={{ wordBreak: 'break-word' }}>
+                                        {formatCurrencyNoDecimals(allTimeGain)}
+                                    </div>
+                                    <div className="text-xs text-gray-400 mt-1 font-medium">Realiseret + Urealiseret</div>
+                                </div>
+                            </div>
+                            {/* Today's Increase */}
+                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                                <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <i className="ph ph-arrow-up-right"></i> Stigning i dag
+                                </div>
+                                <div className="mt-2">
+                                    {(() => {
+                                        // Calculate today's increase in amount and percentage
+                                        let todayGain = 0;
+                                        let todayPct = 0;
+                                        if (calc.portfolio && marketData) {
+                                            let totalVal = 0;
+                                            let totalPrevVal = 0;
+                                            Object.values(calc.portfolio).forEach(p => {
+                                                const m = marketData[p.ticker] || {};
+                                                const price = m.price || 0;
+                                                const prevClose = m.previousClose || price;
+                                                const fxM = marketData[`${p.cur}DKK=X`];
+                                                const fxRate = fxM?.price || 1;
+                                                const val = p.qty * price * fxRate;
+                                                const prevVal = p.qty * prevClose * fxRate;
+                                                totalVal += val;
+                                                totalPrevVal += prevVal;
+                                            });
+                                            todayGain = totalVal - totalPrevVal;
+                                            todayPct = totalPrevVal > 0 ? (todayGain / totalPrevVal) * 100 : 0;
+                                        }
+                                        return (
+                                            <>
+                                                <div className={`text-3xl font-bold tracking-tight ${todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600'} break-words`} style={{ wordBreak: 'break-word' }}>
+                                                    {formatCurrencyNoDecimals(todayGain)}
+                                                    <span className={`text-lg font-bold ml-2 align-middle ${todayPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{todayPct.toFixed(2)}%</span>
+                                                </div>
+                                                <div className="text-xs text-gray-400 mt-1 font-medium">
+                                                    Ændring siden sidste lukning
+                                                </div>
+                                            </>
+                                        );
+                                    })()}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Performance by Year: Above graphs on small screens, right of graphs on large screens */}
+                        <div className="block lg:hidden mt-8">
+                            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                                <div className="p-4 border-b border-gray-100 bg-gray-50">
+                                    <h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Performance by Year</h3>
+                                </div>
+                                <div className="divide-y divide-gray-100">
+                                    {calc.yearlyStats.map(stat => (
+                                        <div key={stat.year} className="p-4 hover:bg-gray-50 transition-colors">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="font-bold text-gray-900 text-lg">{stat.year}</span>
+                                                <span className={`font-bold text-lg ${stat.return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.return > 0 ? '+' : ''}{stat.return.toFixed(2)}%</span>
+                                            </div>
+                                            {/* Gain Row */}
+                                            <div className="flex justify-between items-center text-xs text-gray-500 mb-1">
+                                                <span>Gain/Loss (DKK)</span>
+                                                <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrency(stat.gainAbs)}</span>
+                                            </div>
+                                            {/* Flow Row */}
+                                            <div className="flex justify-between items-center text-xs text-gray-500">
+                                                <span>Net Capital Flow</span>
+                                                <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrency(stat.breakdown.in)}\nOut: ${formatCurrency(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrency(stat.flow)}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {calc.yearlyStats.length === 0 && (
+                                        <div className="p-8 text-center text-gray-400 italic">No data available</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            {/* LEFT: GRAPHS */}
+                            <div className="lg:col-span-2 space-y-8">
+                                {/* Value Graph */}
+                                <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Portfolio Value</h3>
+                                    <ResponsiveContainer width="100%" height={280}>
+                                        <AreaChart data={calc.totalValueGraph} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
+                                            <defs>
+                                                <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
+                                                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                                </linearGradient>
+                                            </defs>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                                            <XAxis
+                                                dataKey="date"
+                                                ticks={yearTicks}
+                                                tickFormatter={(d) => d.slice(0, 4)}
+                                                axisLine={false}
+                                                tickLine={false}
+                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
+                                                dy={10}
+                                            />
+                                            <YAxis
+                                                width={45}
+                                                axisLine={false}
+                                                tickLine={false}
+                                                tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
+                                            />
+                                            <Tooltip
+                                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                formatter={(v) => formatCurrency(v)}
+                                            />
+                                            <Area
+                                                type="monotone"
+                                                dataKey="value"
+                                                stroke="#2563eb"
+                                                strokeWidth={2}
+                                                fill="url(#colorVal)"
+                                                isAnimationActive={false} // DISABLED ANIMATION
+                                            />
+                                        </AreaChart>
+                                    </ResponsiveContainer>
+                                </div>
+
+                                {/* Growth Graph */}
+                                <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Time-Weighted Return (%)</h3>
+                                    <ResponsiveContainer width="100%" height={280}>
+                                        <AreaChart data={calc.growthGraphData} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
+                                            <defs>
+                                                <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                                </linearGradient>
+                                            </defs>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                                            <XAxis
+                                                dataKey="date"
+                                                ticks={yearTicks}
+                                                tickFormatter={(d) => d.slice(0, 4)}
+                                                axisLine={false}
+                                                tickLine={false}
+                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
+                                                dy={10}
+                                            />
+                                            <YAxis
+                                                width={45}
+                                                axisLine={false}
+                                                tickLine={false}
+                                                tickFormatter={(v) => `${v.toFixed(0)}%`}
+                                                tick={{ fontSize: 12, fill: '#9ca3af' }}
+                                            />
+                                            <Tooltip
+                                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                formatter={(v) => `${v.toFixed(2)}%`}
+                                            />
+                                            <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
+                                            <Area
+                                                type="monotone"
+                                                dataKey="value"
+                                                stroke="#10b981"
+                                                strokeWidth={2}
+                                                fill="url(#colorGrowth)"
+                                                isAnimationActive={false} // DISABLED ANIMATION
+                                            />
+                                        </AreaChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+
+                            {/* RIGHT: STATS TABLE (only on large screens) */}
+                            <div className="hidden lg:block">
+                                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden sticky top-6">
+                                    <div className="p-4 border-b border-gray-100 bg-gray-50">
+                                        <h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Performance by Year</h3>
+                                    </div>
+                                    <div className="divide-y divide-gray-100">
+                                        {calc.yearlyStats.map(stat => (
+                                            <div key={stat.year} className="p-4 hover:bg-gray-50 transition-colors">
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="font-bold text-gray-900 text-lg">{stat.year}</span>
+                                                    <span className={`font-bold text-lg ${stat.return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.return > 0 ? '+' : ''}{stat.return.toFixed(2)}%</span>
+                                                </div>
+                                                {/* Gain Row */}
+                                                <div className="flex justify-between items-center text-xs text-gray-500 mb-1">
+                                                    <span>Gain/Loss (DKK)</span>
+                                                    <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrency(stat.gainAbs)}</span>
+                                                </div>
+                                                {/* Flow Row */}
+                                                <div className="flex justify-between items-center text-xs text-gray-500">
+                                                    <span>Net Capital Flow</span>
+                                                    <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrency(stat.breakdown.in)}\nOut: ${formatCurrency(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrency(stat.flow)}</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {calc.yearlyStats.length === 0 && (
+                                            <div className="p-8 text-center text-gray-400 italic">No data available</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            // 4. EDITOR
+            const renderEditor = () => {
+                const viewRows = [...rows]
+                    .map((r, i) => ({ ...r, _origIdx: i }))
+                    .sort((a, b) => (parseDanishDate(a['Date']) || 0) - (parseDanishDate(b['Date']) || 0));
+
+                let runningBalances = {};
+                let runningHoldings = {};
+
+                // Focus helpers
+                const focusNext = (el) => {
+                    if (!el) return;
+                    const rowEl = el.closest('tr');
+                    if (!rowEl) return;
+                    const focusables = Array.from(rowEl.querySelectorAll('input, select'));
+                    const idx = focusables.indexOf(el);
+                    const next = focusables[idx + 1];
+                    if (next) next.focus();
+                };
+                const focusPrev = (el) => {
+                    if (!el) return;
+                    const rowEl = el.closest('tr');
+                    if (!rowEl) return;
+                    const focusables = Array.from(rowEl.querySelectorAll('input, select'));
+                    const idx = focusables.indexOf(el);
+                    const prev = focusables[idx - 1];
+                    if (prev) prev.focus();
+                };
+
+                // --- KEY HELPER: Handles the "Edit Buffer" for Danish Numbers ---
+                // fieldKey: The actual data column (e.g., 'Price')
+                // rawKey: Temporary state key for typing (e.g., '__price_raw')
+                const renderNumInput = (row, fieldKey, rawKey, extraClass = "", title = "") => {
+                    return (
+                        <input
+                            inputMode="decimal"
+                            className={`w-16 input-base p-1 rounded text-right font-mono ${extraClass}`}
+                            title={title}
+                            // 1. DISPLAY: Show Raw text if typing, otherwise formatted Danish Number
+                            value={row[rawKey] !== undefined ? row[rawKey] : formatDanishNumber(row[fieldKey], 10)}
+
+                            // 2. CHANGE: Just save the raw text to buffer (allow commas/dots)
+                            onChange={e => setRows(prev => {
+                                const n = [...prev];
+                                n[row._idx] = { ...n[row._idx], [rawKey]: e.target.value };
+                                return n;
+                            })}
+
+                            // 3. BLUR: Parse the buffer into a real Number and cleanup
+                            onBlur={() => setRows(prev => {
+                                const n = [...prev];
+                                if (n[row._idx][rawKey] !== undefined) {
+                                    n[row._idx][fieldKey] = parseDanishNumber(n[row._idx][rawKey]);
+                                    delete n[row._idx][rawKey];
+                                }
+                                return n;
+                            })}
+
+                            // 4. ENTER: Commit and move to next field
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.target.blur(); // Triggers the onBlur logic above
+                                    if (e.shiftKey) focusPrev(e.currentTarget);
+                                    else focusNext(e.currentTarget);
+                                }
+                            }}
+                        />
+                    );
+                };
+
+                const editorRows = viewRows.map(row => {
+                    const idx = row._origIdx;
+                    const acc = row['Account'] || 'Unknown';
+                    const ticker = row['Ticker'];
+                    // NEW: Track holdings specific to this account
+                    const holdingKey = `${ticker}_${acc}`;
+                    // Init trackers
+                    if (!runningBalances[acc]) runningBalances[acc] = 0;
+                    if (ticker && !runningHoldings[holdingKey]) runningHoldings[holdingKey] = 0;
+
+                    // Parse Numbers
+                    const qty = parseDanishNumber(row['Qty']);
+                    const price = parseDanishNumber(row['Price']);
+                    const comm = parseDanishNumber(row['Commission']);
+                    const tax = parseDanishNumber(row['Withheld Tax']);
+                    const taxRate = parseDanishNumber(row['FxRate']) || 1;
+
+                    // Currency Logic
+                    const stockCurrency = (row['Currency'] || 'DKK').toUpperCase();
+                    const accCurrency = (config.currencies[acc] || 'DKK').toUpperCase();
+                    const isCrossCurrency = accCurrency !== stockCurrency;
+                    // If USD Account buys USD Stock, Rate is effectively 1 (no conversion needed for Balance).
+                    // BUT for SKAT (Zone B), we still need the FxRate stored in the row.
+                    const conversionRate = isCrossCurrency ? taxRate : 1;
+
+                    // Type Logic
+                    const effectiveType = determineType(row['Type'], row['Ticker'], row['Qty']);
+                    const isTrade = ['Stock', 'ETF'].includes(effectiveType);
+                    const isCash = effectiveType === 'Cash' || effectiveType === 'Dividend';
+                    const isDividend = effectiveType === 'Dividend';
+
+                    const holdingsBefore = runningHoldings[holdingKey] || 0;
+
+                    // Update running holdings for NEXT row
+                    if (effectiveType === 'Stock' || effectiveType === 'ETF') {
+                        runningHoldings[holdingKey] += qty;
+                    }
+
+
+                    let delta = 0;
+                    let calcDetail = '';
+
+                    if (isTrade) {
+                        // Formula: -((Qty * Price * Rate) + Commission)
+                        const assetVal = (qty * price) * conversionRate;
+                        delta = -(assetVal + comm);
+                        calcDetail = `${effectiveType}: -(${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(comm)}`;
+                    } else if (isCash) {
+                        // Formula: (Qty * Price * Rate) - Tax
+                        const grossVal = (qty * price) * conversionRate;
+                        delta = grossVal - tax;
+                        calcDetail = `Cash: (${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(tax)}`;
+                    }
+                    runningBalances[acc] += delta;
+
+                    const meta = {
+                        isTrade, isCash, isCrossCurrency, stockCurrency, isDividend,
+                        holdingsSnapshot: holdingsBefore, // <--- Store for UI
+                        warnFx: (stockCurrency !== 'DKK' && taxRate === 1) // <--- Warning Flag
+                    };
+
+                    return { ...row, _idx: idx, _bal: runningBalances[acc], _delta: delta, _calcDetail: calcDetail, _accCur: accCurrency, _meta: meta };
+                });
+
+                const displayRows = editorRows.filter(r => {
+                    // 1. Sidebar Account Filter (Existing)
+                    if (filterAccount !== 'All' && r['Account'] !== filterAccount) return false;
+
+                    // 2. Column Header Filters (New)
+                    return Object.entries(filters).every(([key, searchVal]) => {
+                        if (!searchVal) return true; // No filter for this column
+
+                        // Grab value, handle numbers safely, convert to lower case for case-insensitive search
+                        const val = String(r[key] || '').toLowerCase();
+                        return val.includes(searchVal.toLowerCase());
+                    });
+                }).slice().reverse(); // Reverse to show newest on top
+
+                const currentAccCurrency = filterAccount !== 'All' ? (config.currencies[filterAccount] || 'DKK') : '';
+
+                return (
+                    <div className="flex flex-col h-full bg-white">
+                        {/* TOP BAR */}
+                        <div className="flex items-center justify-between p-2 border-b bg-gray-50 shrink-0">
+                            <div className="flex gap-2">
+                                <button onClick={() => {
+                                    const dStr = normalizeDate(new Date().toISOString().split('T')[0]);
+                                    setRows(prev => [{ 'Date': dStr, 'Type': 'Stock', 'Ticker': '', 'Qty': 0, 'Price': 0, 'FxRate': 1, 'Commission': 0, 'Withheld Tax': 0, 'Currency': 'DKK', 'Account': filterAccount !== 'All' ? filterAccount : '' }, ...prev]);
+                                }} className="flex items-center gap-1 px-3 py-1 bg-white border rounded hover:bg-gray-100 text-sm font-medium text-gray-700">
+                                    <i className="ph ph-plus"></i> Add Row
+                                </button>
+                                <button onClick={saveToGithub} className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium shadow-sm"><i className="ph ph-cloud-arrow-up"></i> Sync</button>
+                                {statusMsg && <span className="text-xs text-gray-500 self-center ml-2">{statusMsg}</span>}
+                            </div>
+                        </div>
+
+                        {/* TABLE */}
+                        <div className="flex-1 overflow-auto custom-scrollbar">
+                            <table className="min-w-full text-xs text-left border-collapse">
+                                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                                    {/* Row 1: Column Titles */}
+                                    <tr>
+                                        <th className="p-2 border-b sticky left-0 bg-gray-50 z-20 w-8"></th>
+                                        {CSV_COLUMNS.map(c => {
+                                            if (filterAccount !== 'All' && c === 'Account') return null;
+                                            const currentAccCurrency = filterAccount !== 'All' ? (config.currencies[filterAccount] || 'DKK') : '';
+                                            const showCur = (c === 'Commission' || c === 'Withheld Tax') && currentAccCurrency;
+
+                                            return (
+                                                <th key={c} className="p-2 border-b font-semibold text-gray-600">
+                                                    {c} {showCur && <span className="ml-1 text-[10px] text-gray-400">({currentAccCurrency})</span>}
+                                                </th>
+                                            );
+                                        })}
+                                        <th className="p-2 border-b font-semibold text-gray-600 text-right">Delta</th>
+                                        <th className="p-2 border-b font-semibold text-gray-600 text-right">Balance</th>
+                                    </tr>
+
+                                    {/* Row 2: Filter Inputs */}
+                                    <tr className="bg-gray-50">
+                                        <th className="p-1 border-b sticky left-0 bg-gray-50 z-20">
+                                            {/* Clear Filters Button (shows only if filters exist) */}
+                                            {Object.keys(filters).some(k => filters[k]) && (
+                                                <button onClick={() => setFilters({})} className="text-gray-400 hover:text-red-500" title="Clear All Filters">
+                                                    <i className="ph ph-x-circle"></i>
+                                                </button>
+                                            )}
+                                        </th>
+                                        {CSV_COLUMNS.map(c => {
+                                            if (filterAccount !== 'All' && c === 'Account') return null;
+                                            return (
+                                                <th key={c} className="p-1 border-b">
+                                                    <input
+                                                        className="w-full text-[10px] p-1 border border-gray-200 rounded bg-white focus:border-blue-300 outline-none"
+                                                        placeholder={`Filter...`}
+                                                        value={filters[c] || ''}
+                                                        onChange={e => setFilters(prev => ({ ...prev, [c]: e.target.value }))}
+                                                    />
+                                                </th>
+                                            );
+                                        })}
+                                        {/* Empty spacers for Delta/Balance columns (usually not filtered) */}
+                                        <th className="p-1 border-b"></th>
+                                        <th className="p-1 border-b"></th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {displayRows.map(row => (
+                                        <tr key={row._idx} className="group hover:bg-blue-50/30">
+                                            <td className="p-1 text-center sticky left-0 bg-white group-hover:bg-blue-50/30 border-r">
+                                                <button onClick={() => confirm('Delete?') && setRows(prev => prev.filter((_, i) => i !== row._idx))} className="text-gray-300 hover:text-red-500"><i className="ph ph-trash"></i></button>
+                                            </td>
+
+                                            {/* Date */}
+                                            <td className="p-1"><FlatpickrDate value={row['Date']} onChange={(v) => updateRow(row._idx, 'Date', v)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+
+                                            {/* Type */}
+                                            <td className="p-1">
+                                                <select className="w-20 input-base p-1 rounded font-medium text-gray-700" value={row['Type']} onChange={e => updateRow(row._idx, 'Type', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
+                                                    {TYPE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                                </select>
+                                            </td>
+
+                                            {/* Ticker */}
+                                            <td className="p-1"><input className="w-full input-base p-1 rounded font-medium" value={row['Ticker']} onChange={e => updateRow(row._idx, 'Ticker', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+
+                                            {/* 1. Qty */}
+                                            <td className="p-1 relative group/qty">
+                                                {renderNumInput(row, 'Qty', '__qty_raw')}
+
+                                                {/* The Hint: Only show if Dividend and we have a ticker */}
+                                                {row._meta.isDividend && row['Ticker'] && (
+                                                    <div className="absolute top-0 right-0 -mr-1 -mt-3 pointer-events-none opacity-0 group-hover/qty:opacity-100 transition-opacity z-10">
+                                                        <div className="bg-gray-800 text-white text-[10px] px-2 py-1 rounded shadow-lg">
+                                                            Held: {formatDanishNumber(row._meta.holdingsSnapshot, 0)} pcs
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </td>
+
+                                            {/* 2. Price */}
+                                            <td className="p-1">{renderNumInput(row, 'Price', '__price_raw', row._meta.isCash ? 'text-gray-300' : '')}</td>
+
+                                            {/* Currency */}
+                                            <td className="p-1">
+                                                <select className="w-16 input-base p-1 rounded text-xs" value={row['Currency']} onChange={e => updateRow(row._idx, 'Currency', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
+                                                    {CURRENCY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                                </select>
+                                            </td>
+
+                                            {/* FxRate with Warning Tooltip */}
+                                            <td className="p-1">
+                                                {renderNumInput(
+                                                    row,
+                                                    'FxRate',
+                                                    '__fx_raw',
+                                                    // 1. Visual: Keep the Orange Warning Style
+                                                    row._meta.warnFx ? 'bg-orange-50 text-orange-700 font-bold border border-orange-300' : '',
+                                                    // 2. Tooltip: Pass the warning text here as the 5th argument
+                                                    row._meta.warnFx ? "Critical: Foreign currency with Rate 1.00. Tax report will be incorrect." : "Exchange Rate used for Tax Calc"
+                                                )}
+                                            </td>
+
+                                            {/* 4. Commission */}
+                                            <td className="p-1">{renderNumInput(row, 'Commission', '__comm_raw', !row._meta.isTrade ? 'text-gray-300' : 'text-gray-700', 'Trading Fee (Account Currency)')}</td>
+
+                                            {/* 5. Withheld Tax */}
+                                            <td className="p-1">{renderNumInput(row, 'Withheld Tax', '__tax_raw', row['Type'] === 'Dividend' ? 'text-gray-700' : 'text-gray-300', 'Dividend Tax (Account Currency)')}</td>
+
+                                            {/* Account */}
+                                            {filterAccount === 'All' && (
+                                                <td className="p-1"><input className="w-24 input-base p-1 rounded text-xs" value={row['Account']} onChange={e => updateRow(row._idx, 'Account', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+                                            )}
+
+                                            {/* Note */}
+                                            <td className="p-1"><input className="w-24 input-base p-1 rounded text-gray-400 text-xs" value={row['Note']} onChange={e => updateRow(row._idx, 'Note', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+
+                                            {/* Delta & Balance */}
+                                            <td className={`p-2 text-right font-mono ${row._delta >= 0 ? 'text-green-600' : 'text-red-600'}`} title={row._calcDetail}>{formatNumber2(row._delta)}</td>
+                                            <td className="p-2 text-right font-mono font-bold text-gray-700">{formatNumber2(row._bal)}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            };
+
+            // 5. SPLIT TOOL 
+            const renderSplitTool = () => {
+                const tickers = uniqueTickers;
+                const selected = splitParams.ticker || (tickers[0] || '');
+
+                // 1. Prepare Market Data (Blue Line) -> Convert to Timestamps { x, y }
+                const md = marketData[selected];
+                const hasData = md && md.history && md.history.length > 0;
+
+                const graphData = hasData ? md.history.map(h => ({
+                    x: new Date(h.date).getTime(),
+                    y: h.close
+                })) : [];
+
+                // 2. Prepare User Trades (Dots)
+                const userTrades = txs
+                    .filter(tx => tx.ticker === selected && (tx.type === 'BUY' || tx.type === 'SELL'))
+                    .map(tx => ({
+                        x: tx.date.getTime(),
+                        y: tx.price,
+                        type: tx.type,
+                        dateStr: getLocalISO(tx.date)
+                    }));
+
+                // 3. Calculate Impacted Rows based on Range
+                const startIso = splitParams.startDateIso || '1900-01-01';
+                const endIso = splitParams.endDateIso || '2099-12-31';
+
+                const impactedRows = rows.filter(r => {
+                    if ((r['Ticker'] || '').trim() !== selected) return false;
+                    const t = determineType(r['Type'], r['Ticker'], r['Qty']);
+                    if (!['Stock', 'ETF'].includes(t)) return false; // Only touch Trades
+
+                    const rDate = displayDateToIso(r['Date']);
+                    // Range Check (Inclusive)
+                    return rDate >= startIso && rDate <= endIso;
+                }).length;
+
+                // 4. Graph Click Handler (Set Range)
+                const handleChartClick = (e) => {
+                    // Recharts sometimes returns null events or missing labels if clicked on empty space
+                    if (!e || !e.activeLabel) return;
+
+                    // activeLabel is usually the X-coordinate (timestamp) for number axes
+                    // We must convert it safely to an ISO string
+                    let clickedDate;
+                    try {
+                        clickedDate = new Date(e.activeLabel).toISOString().split('T')[0];
+                    } catch (err) { return; }
+
+                    setSplitParams(prev => {
+                        const hasStart = !!prev.startDateIso;
+                        const hasEnd = !!prev.endDateIso;
+
+                        // SCENARIO 1: Fresh Start
+                        // If we have (Both) OR (Neither) OR (Only End - the bug source), we reset.
+                        if ((hasStart && hasEnd) || (!hasStart && !hasEnd) || (!hasStart && hasEnd)) {
+                            return { ...prev, startDateIso: clickedDate, endDateIso: '' };
+                        }
+
+                        // SCENARIO 2: Completing the Range
+                        // We have a Start, but no End.
+                        else {
+                            const d1 = prev.startDateIso;
+                            const d2 = clickedDate;
+
+                            // Auto-swap if user clicked backwards (clicked 2020 then 2018)
+                            if (d2 < d1) {
+                                return { ...prev, startDateIso: d2, endDateIso: d1 };
+                            }
+                            return { ...prev, endDateIso: d2 };
+                        }
+                    });
+                };
+
+                const applySplit = () => {
+                    if (!selected) return;
+                    const num = parseDanishNumber(splitParams.num) || 0;
+                    const den = parseDanishNumber(splitParams.den) || 0;
+                    if (num <= 0 || den <= 0) { alert('Invalid ratio'); return; }
+
+                    const ratio = num / den;
+
+                    // VERIFICATION MESSAGE
+                    const confirmMsg =
+                        `About to apply Split ${num}:${den} to ${selected}.
+
+Target Range: ${startIso} to ${endIso}
+Rows Affected: ${impactedRows}
+
+VERIFICATION:
+1. Quantity will be multiplied by ${formatNumber2(ratio)}
+2. Price will be divided by ${formatNumber2(ratio)}
+3. Commission, Tax, and Account will remain UNTOUCHED.
+
+Proceed?`;
+
+                    if (confirm(confirmMsg)) {
+                        setRows(prev => {
+                            return prev.map(r => {
+                                // 1. Filter Ticker
+                                if ((r['Ticker'] || '').trim() !== selected) return r;
+                                // 2. Filter Type (Strictly Stocks/ETFs only)
+                                const t = determineType(r['Type'], r['Ticker'], r['Qty']);
+                                if (!['Stock', 'ETF'].includes(t)) return r;
+                                // 3. Filter Date Range
+                                const rDate = displayDateToIso(r['Date']);
+                                if (rDate < startIso || rDate > endIso) return r;
+
+                                // 4. EXECUTE SAFE UPDATE
+                                // We spread ...r first to keep all original fields (Commission, etc)
+                                // Then we strictly overwrite Qty and Price.
+                                return {
+                                    ...r,
+                                    'Qty': parseDanishNumber(r['Qty']) * ratio,
+                                    'Price': parseDanishNumber(r['Price']) / ratio,
+                                    'Note': (r['Note'] || '') + ` [Split ${num}:${den}]`
+                                };
+                            });
+                        });
+                        alert("Success. Split applied to selected range.");
+                        // Reset range to avoid double application
+                        setSplitParams(s => ({ ...s, startDateIso: '', endDateIso: '' }));
+                    }
+                };
+
+                // Helper to get X coordinate for ReferenceArea
+                const refStart = splitParams.startDateIso ? new Date(splitParams.startDateIso).getTime() : null;
+                const refEnd = splitParams.endDateIso ? new Date(splitParams.endDateIso).getTime() : null;
+
+                return (
+                    <div className="p-6 h-full flex flex-col overflow-hidden">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="font-bold text-lg flex items-center gap-2">
+                                <i className="ph ph-arrows-split text-blue-600"></i> Aktiesplit-værktøj
+                            </h3>
+                            {!hasData && (
+                                <span className="text-xs bg-red-100 text-red-700 px-3 py-1 rounded-full font-medium">
+                                    Ingen markedsdata. Klik "Opdater priser".
+                                </span>
+                            )}
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full overflow-hidden">
+
+                            {/* LEFT COL: Configuration */}
+                            <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar">
+
+                                {/* A. Auto-Detector (Updated to fill start date) */}
+                                {splitCandidates.length > 0 && (
+                                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                                        <div className="flex items-center gap-2 mb-3 text-orange-800 font-bold text-sm uppercase tracking-wide">
+                                            <i className="ph ph-warning-circle text-lg"></i> Fundne kandidater
+                                        </div>
+                                        <div className="space-y-2">
+                                            {splitCandidates.map((c, i) => (
+                                                <div key={i}
+                                                    onClick={() => setSplitParams({
+                                                        ticker: c.ticker,
+                                                        num: c.suggestedNum,
+                                                        den: c.suggestedDen,
+                                                        startDateIso: '',
+                                                        endDateIso: c.date
+                                                    })}
+                                                    className="bg-white p-3 rounded border border-orange-100 shadow-sm cursor-pointer hover:border-orange-400 transition-colors group relative">
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <span className="font-bold text-gray-800">{c.ticker}</span>
+                                                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
+                                                            Muligt {c.suggestedNum}:{c.suggestedDen}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        Afvigelse på: {c.date}
+                                                    </div>
+                                                    <div className="absolute right-2 bottom-2 opacity-0 group-hover:opacity-100 text-blue-600 text-xs font-bold transition-opacity">
+                                                        Vælg &rarr;
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* B. The Manual Form */}
+                                <div className="card bg-gray-50 border-blue-100">
+                                    <h4 className="font-bold text-gray-700 mb-3 text-sm">Split-konfiguration</h4>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="text-xs font-semibold text-gray-500 uppercase">Ticker</label>
+                                            <select className="w-full border border-gray-300 p-2 rounded bg-white mt-1"
+                                                value={selected}
+                                                onChange={e => setSplitParams(s => ({ ...s, ticker: e.target.value }))}>
+                                                {tickers.map(t => <option key={t} value={t}>{t}</option>)}
+                                            </select>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="text-xs font-semibold text-gray-500 uppercase">Ny antal</label>
+                                                <input className="w-full border p-2 rounded mt-1 font-mono" type="number" value={splitParams.num} onChange={e => setSplitParams(s => ({ ...s, num: e.target.value }))} />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-semibold text-gray-500 uppercase">Gammel antal</label>
+                                                <input className="w-full border p-2 rounded mt-1 font-mono" type="number" value={splitParams.den} onChange={e => setSplitParams(s => ({ ...s, den: e.target.value }))} />
+                                            </div>
+                                        </div>
+
+                                        {/* Date Range Inputs */}
+                                        <div className="p-3 bg-blue-50 rounded border border-blue-100">
+                                            <label className="text-xs font-bold text-blue-800 uppercase flex justify-between">
+                                                <span>Anvend interval</span>
+                                                <span className="font-normal normal-case text-blue-600 cursor-pointer" onClick={() => setSplitParams(s => ({ ...s, startDateIso: '', endDateIso: '' }))}>Ryd</span>
+                                            </label>
+
+                                            <div className="mt-2 space-y-2">
+                                                <div>
+                                                    <span className="text-[10px] text-gray-500 uppercase">Fra (inkluderet)</span>
+                                                    <input type="date" className="w-full border p-1 rounded text-sm"
+                                                        value={splitParams.startDateIso}
+                                                        onChange={e => setSplitParams(s => ({ ...s, startDateIso: e.target.value }))}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <span className="text-[10px] text-gray-500 uppercase">Til (inkluderet)</span>
+                                                    <input type="date" className="w-full border p-1 rounded text-sm"
+                                                        value={splitParams.endDateIso}
+                                                        onChange={e => setSplitParams(s => ({ ...s, endDateIso: e.target.value }))}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="text-[10px] text-blue-600 mt-2 italic">
+                                                Tip: Klik på to punkter i grafen for at vælge interval automatisk.
+                                            </p>
+                                        </div>
+
+                                        <div className="pt-2">
+                                            <button onClick={applySplit}
+                                                disabled={impactedRows === 0}
+                                                className={`w-full py-2 text-white rounded font-medium shadow-sm transition-colors ${impactedRows > 0 ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-300 cursor-not-allowed'}`}>
+                                                Udfør split ({splitParams.num}:{splitParams.den})
+                                            </button>
+                                            <p className="text-center text-[10px] text-gray-400 mt-2">
+                                                Vil ændre <strong>{impactedRows}</strong> transaktionsrækker.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* RIGHT COL: The Interactive Graph */}
+                            <div className="lg:col-span-2 flex flex-col h-full min-h-[400px]">
+                                <div className="card flex-1 flex flex-col">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h4 className="font-bold text-gray-700 flex items-center gap-2">
+                                            <span className="w-3 h-3 rounded-full bg-blue-500"></span> Markedshistorik
+                                            <span className="text-gray-300 mx-2">vs</span>
+                                            <span className="w-3 h-3 rounded-full bg-green-500"></span> Dine handler
+                                        </h4>
+                                    </div>
+
+                                    <div className="flex-1 w-full min-h-0 relative">
+                                        {!hasData && (
+                                            <div className="absolute inset-0 flex items-center justify-center text-gray-400 z-10">
+                                                Ingen markedsdata tilgængelig for {selected}
+                                            </div>
+                                        )}
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <ComposedChart
+                                                margin={{ top: 20, right: 30, bottom: 20, left: 10 }}
+                                                onClick={handleChartClick} // <--- CLICK TO SELECT RANGE
+                                                style={{ cursor: 'crosshair' }}
+                                            >
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+
+                                                {/* X Axis: Time Scale */}
+                                                <XAxis
+                                                    dataKey="x"
+                                                    type="number"
+                                                    domain={['auto', 'auto']}
+                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                                    tickFormatter={(t) => new Date(t).toLocaleDateString()}
+                                                    minTickGap={50}
+                                                />
+
+                                                {/* Y Axis: Price Scale */}
+                                                <YAxis
+                                                    dataKey="y"
+                                                    width={60}
+                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                                    domain={['auto', 'auto']}
+                                                    tickFormatter={(v) => formatNumber2(v)}
+                                                />
+
+                                                <Tooltip
+                                                    contentStyle={{ fontSize: '12px', borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                                                    formatter={(val, name) => [formatNumber2(val), name]}
+                                                    labelFormatter={(label) => new Date(label).toLocaleDateString()}
+                                                />
+
+                                                {/* 1. Highlight Selected Range */}
+                                                {refStart && refEnd && (
+                                                    <ReferenceArea x1={refStart} x2={refEnd} fill="#3b82f6" fillOpacity={0.1} />
+                                                )}
+                                                {/* If only start is selected, show a line */}
+                                                {refStart && !refEnd && (
+                                                    <ReferenceLine x={refStart} stroke="#3b82f6" strokeDasharray="3 3" />
+                                                )}
+
+                                                {/* 2. Yahoo History (Area) */}
+                                                <Area data={graphData} type="monotone" dataKey="y" name="Market Price" stroke="#3b82f6" strokeWidth={2} fillOpacity={0.05} fill="#3b82f6" isAnimationActive={false} />
+
+                                                {/* 3. User BUYS (Scatter) */}
+                                                <Scatter data={userTrades.filter(t => t.type === 'BUY')} name="Your Buy" fill="#10b981" shape="circle" isAnimationActive={false} />
+
+                                                {/* 4. User SELLS (Scatter) */}
+                                                <Scatter data={userTrades.filter(t => t.type === 'SELL')} name="Your Sell" fill="#ef4444" shape="triangle" isAnimationActive={false} />
+
+                                            </ComposedChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <div className="mt-4 text-xs text-gray-500 bg-blue-50/50 p-3 rounded border border-blue-100 flex gap-4 items-center">
+                                        <div className="flex-1">
+                                            <strong>Brug:</strong> Klik på grafen for at vælge <span className="text-blue-600 font-bold">startdato</span>. Klik igen for at vælge <span className="text-blue-600 font-bold">slutdato</span>. <br />
+                                            Det blå område viser hvilke transaktioner der splittes.
+                                        </div>
+                                        <div className="text-right">
+                                            <span className="block font-bold text-gray-700">Rækker i interval: {impactedRows}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                );
+            };
+
+            const updateRow = (idx, k, v) => setRows(prev => {
+                const n = [...prev];
+                let newVal = v;
+                if (k === 'Type') newVal = determineType(v, n[idx]['Ticker'], n[idx]['Qty']);
+                if (k === 'Currency') newVal = normalizeCurrency(v);
+                n[idx] = { ...n[idx], [k]: newVal };
+                return n;
+            });
+            const loadFromGithub = async () => {
+                if (!ghConfig.token) return;
+                setStatusMsg('Loading...'); // UI Feedback
+
+                try {
+                    const headers = { 'Authorization': `token ${ghConfig.token}` };
+                    const repoBase = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/`;
+
+                    // 1. Fetch Both Files in Parallel
+                    const [resData, resSettings] = await Promise.all([
+                        fetch(`${repoBase}${ghConfig.path}`, { headers }),
+                        fetch(`${repoBase}portfolio-settings.csv`, { headers }) // Assumes file is named portfolio-settings.csv
+                    ]);
+
+                    if (!resData.ok) throw new Error('Repo Error');
+
+                    // 2. Process Data CSV
+                    const dataJson = await resData.json();
+                    setFileSha(dataJson.sha);
+                    const dataCsv = b64_to_utf8(dataJson.content);
+
+                    Papa.parse(dataCsv, {
+                        header: true, skipEmptyLines: true,
+                        complete: (r) => {
+                            const normalized = normalizeAllRows(r.data);
+                            setRows(normalized);
+                            const errs = validateData(normalized);
+                            setSchemaErrors(errs);
+                        }
+                    });
+
+                    // 3. Process Settings CSV (If it exists)
+                    if (resSettings.ok) {
+                        const setJson = await resSettings.json();
+                        const setCsv = b64_to_utf8(setJson.content);
+
+                        Papa.parse(setCsv, {
+                            header: true, skipEmptyLines: true,
+                            complete: (r) => {
+                                // Parse the 3-column CSV into our Config Object
+                                const newConfig = { askAccount: '', currencies: {}, hidden: [] };
+
+                                r.data.forEach(row => {
+                                    const type = (row['Type'] || '').trim().toUpperCase();
+                                    const key = (row['Key'] || '').trim();
+                                    const val = (row['Value'] || '').trim();
+
+                                    if (type === 'ASK') newConfig.askAccount = val;
+                                    if (type === 'CURRENCY') newConfig.currencies[key] = val;
+                                    if (type === 'HIDDEN') newConfig.hidden.push(key);
+                                });
+
+                                setConfig(newConfig);
+                                console.log("Settings loaded:", newConfig);
+                            }
+                        });
+                    } else {
+                        console.log("No settings file found, using defaults.");
+                    }
+
+                    setStatusMsg('Loaded');
+                    setTimeout(() => setStatusMsg(''), 2000);
+
+                } catch (e) {
+                    console.error(e);
+                    setStatusMsg('Error Loading');
+                }
+            };
+            const saveToGithub = async () => {
+                if (!ghConfig.token) { setShowSettings(true); return; }
+                setStatusMsg('Saving...');
+                const sorted = [...rows].sort((a, b) => (parseDanishDate(a['Date']) || 0) - (parseDanishDate(b['Date']) || 0));
+                const csv = Papa.unparse(sorted, { columns: CSV_COLUMNS });
+                try {
+                    const res = await fetch(`https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${ghConfig.path}`, {
+                        method: 'PUT', headers: { 'Authorization': `token ${ghConfig.token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: 'Update', content: utf8_to_b64(csv), sha: fileSha })
+                    });
+                    const d = await res.json();
+                    setFileSha(d.content.sha);
+                    setStatusMsg('Saved!');
+                } catch (e) { setStatusMsg('Err'); }
+                setTimeout(() => setStatusMsg(''), 2000);
+            };
+
+            const handleFileUpload = (e) => {
+                Papa.parse(e.target.files[0], {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (r) => {
+                        const normalized = normalizeAllRows(r.data);
+                        setRows(normalized);
+                        const errs = validateData(normalized);
+                        setSchemaErrors(errs);
+                        if (errs.length > 0) setStatusMsg('Data Warnings Found');
+                    }
+                });
+            };
+
+            // --- LAYOUT ---
+            return (
+                <div className="flex h-screen w-full bg-white relative font-sans text-gray-800">
+
+                    {/* SETTINGS MODAL */}
+                    {showSettings && (
+                        <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+                            <div className="bg-white rounded-xl shadow-2xl p-6 w-96 space-y-4">
+                                <h2 className="font-bold text-lg">Cloud Sync Opsætning</h2>
+                                <input className="w-full border p-2 rounded" placeholder="Ejer (Bruger)" value={ghConfig.owner} onChange={e => setGhConfig({ ...ghConfig, owner: e.target.value })} />
+                                <input className="w-full border p-2 rounded" placeholder="Repo-navn" value={ghConfig.repo} onChange={e => setGhConfig({ ...ghConfig, repo: e.target.value })} />
+                                <input className="w-full border p-2 rounded" placeholder="Filsti (data.csv)" value={ghConfig.path} onChange={e => setGhConfig({ ...ghConfig, path: e.target.value })} />
+                                <input className="w-full border p-2 rounded" type="password" placeholder="GitHub Token (Repo-adgang)" value={ghConfig.token} onChange={e => setGhConfig({ ...ghConfig, token: e.target.value })} />
+                                <div className="flex gap-2">
+                                    <button onClick={() => { localStorage.setItem('gh_config', JSON.stringify(ghConfig)); setShowSettings(false); loadFromGithub(); }} className="flex-1 bg-blue-600 text-white py-2 rounded font-medium">Gem & Forbind</button>
+                                    <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-gray-500">Annuller</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* SIDEBAR NAVIGATION (hidden on small screens) */}
+                    <div className="hidden md:flex md:w-64 bg-gray-50 border-r border-gray-200 flex-col shrink-0">
+                        <div className="p-5 border-b border-gray-200 flex justify-between items-center">
+                            <div className="font-bold text-lg flex items-center gap-2"><i className="ph ph-wallet text-blue-600"></i> Portefølje</div>
+                            <button onClick={() => setShowSettings(true)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-gear-six"></i></button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+
+                            {/* 1. Dashboard */}
+                            <button type="button" onClick={() => setView('dashboard')} className={`nav-item w-full text-left ${view === 'dashboard' ? 'active' : ''}`}>
+                                <i className="ph ph-chart-line-up text-lg"></i> Oversigt
+                            </button>
+
+                            {/* 2. Holdings */}
+                            <button type="button" onClick={() => setView('holdings')} className={`nav-item w-full text-left ${view === 'holdings' ? 'active' : ''}`}>
+                                <i className="ph ph-briefcase text-lg"></i> Beholdninger
+                            </button>
+
+
+                            {/* 3. Transactions Editor Section */}
+                            <div>
+                                <button type="button" onClick={() => { setView('editor'); setFilterAccount('All'); }} className={`nav-item w-full text-left ${view === 'editor' && filterAccount === 'All' ? 'active' : ''}`}>
+                                    <i className="ph ph-list-dashes text-lg"></i> Transaktioner
+                                </button>
+                                {/* Account Filters */}
+                                <div className="mt-1 space-y-0.5">
+                                    {accounts
+                                        .filter(acc => !config.hidden.includes(acc)) // 1. Filter out hidden accounts
+                                        .map(acc => {
+                                            // 2. Lookup currency (default to DKK)
+                                            const currency = config.currencies[acc] || 'DKK';
+
+                                            return (
+                                                <button
+                                                    key={acc}
+                                                    onClick={() => { setView('editor'); setFilterAccount(acc); }}
+                                                    className={`sub-nav-item ${view === 'editor' && filterAccount === acc ? 'active' : ''} flex justify-between items-center pr-2`}
+                                                >
+                                                    <span className="truncate" title={acc}>{acc}</span>
+                                                    <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-1 rounded ml-2">
+                                                        {currency}
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                </div>
+                            </div>
+
+                            {/* 4. Tax Report Section */}
+                            <div>
+                                <button type="button" onClick={() => setView('tax')} className={`nav-item w-full text-left ${view === 'tax' ? 'active' : ''}`}>
+                                    <i className="ph ph-bank text-lg"></i> Skatterapport
+                                </button>
+                                {/* Year Selector */}
+                                <div className="mt-1 space-y-0.5">
+                                    {years.map(y => (
+                                        <button type="button" key={y} onClick={() => { setView('tax'); setTaxYear(y); }} className={`sub-nav-item ${view === 'tax' && taxYear === y ? 'active' : ''}`}>
+                                            {y}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* 5. Split Tool (moved to last) */}
+                            <button type="button" onClick={() => setView('split')} className={`nav-item w-full text-left ${view === 'split' ? 'active' : ''}`}>
+                                <i className="ph ph-arrows-split text-lg"></i> Split-værktøj
+                            </button>
+
+                        </div>
+
+                        {/* Bottom Actions */}
+                        <div className="p-4 border-t border-gray-200">
+                            <button onClick={fetchMarketData} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 mb-2">
+                                {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>} Opdater priser
+                            </button>
+                            <label className="flex items-center justify-center gap-2 w-full px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium cursor-pointer">
+                                <i className="ph ph-upload-simple"></i> Importer CSV
+                                <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+                            </label>
+                        </div>
+                    </div>
+
+                    {/* MOBILE OVERLAY NAV */}
+                    {mobileNavOpen && (
+                        <div className="fixed inset-0 z-50 md:hidden">
+                            <div className="absolute inset-0 bg-black/40" onClick={() => setMobileNavOpen(false)}></div>
+                            <div className="absolute top-0 right-0 w-64 h-full bg-white shadow-xl border-l border-gray-200 flex flex-col z-10">
+                                <div className="p-5 border-b border-gray-200 flex justify-between items-center">
+                                    <div className="font-bold text-lg flex items-center gap-2"><i className="ph ph-wallet text-blue-600"></i> Menu</div>
+                                    <button onClick={() => setMobileNavOpen(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x"></i></button>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                                    {/* 1. Dashboard */}
+                                    <button type="button" onClick={() => { setView('dashboard'); setMobileNavOpen(false); }} className={`nav-item w-full text-left ${view === 'dashboard' ? 'active' : ''}`}>
+                                        <i className="ph ph-chart-line-up text-lg"></i> Oversigt
+                                    </button>
+
+                                    {/* 2. Holdings */}
+                                    <button type="button" onClick={() => { setView('holdings'); setMobileNavOpen(false); }} className={`nav-item w-full text-left ${view === 'holdings' ? 'active' : ''}`}>
+                                        <i className="ph ph-briefcase text-lg"></i> Beholdninger
+                                    </button>
+
+                                    {/* 3. Transactions Editor Section */}
+                                    <div>
+                                        <button type="button" onClick={() => { setView('editor'); setFilterAccount('All'); setMobileNavOpen(false); }} className={`nav-item w-full text-left ${view === 'editor' && filterAccount === 'All' ? 'active' : ''}`}>
+                                            <i className="ph ph-list-dashes text-lg"></i> Transaktioner
+                                        </button>
+                                        {/* Account Filters */}
+                                        <div className="mt-1 space-y-0.5">
+                                            {accounts
+                                                .filter(acc => !config.hidden.includes(acc))
+                                                .map(acc => {
+                                                    const currency = config.currencies[acc] || 'DKK';
+                                                    return (
+                                                        <button
+                                                            key={acc}
+                                                            onClick={() => { setView('editor'); setFilterAccount(acc); setMobileNavOpen(false); }}
+                                                            className={`sub-nav-item ${view === 'editor' && filterAccount === acc ? 'active' : ''} flex justify-between items-center pr-2`}
+                                                        >
+                                                            <span className="truncate" title={acc}>{acc}</span>
+                                                            <span className="text-[10px] font-mono text-gray-400 bg-gray-100 px-1 rounded ml-2">
+                                                                {currency}
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
+                                        </div>
+                                    </div>
+
+                                    {/* 4. Tax Report Section */}
+                                    <div>
+                                        <button type="button" onClick={() => { setView('tax'); setMobileNavOpen(false); }} className={`nav-item w-full text-left ${view === 'tax' ? 'active' : ''}`}>
+                                            <i className="ph ph-bank text-lg"></i> Skatterapport
+                                        </button>
+                                        {/* Year Selector */}
+                                        <div className="mt-1 space-y-0.5">
+                                            {years.map(y => (
+                                                <button type="button" key={y} onClick={() => { setView('tax'); setTaxYear(y); setMobileNavOpen(false); }} className={`sub-nav-item ${view === 'tax' && taxYear === y ? 'active' : ''}`}>
+                                                    {y}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* 5. Split Tool */}
+                                    <button type="button" onClick={() => { setView('split'); setMobileNavOpen(false); }} className={`nav-item w-full text-left ${view === 'split' ? 'active' : ''}`}>
+                                        <i className="ph ph-arrows-split text-lg"></i> Split-værktøj
+                                    </button>
+                                </div>
+
+                                {/* Bottom Actions */}
+                                <div className="p-4 border-t border-gray-200">
+                                    <button onClick={() => { fetchMarketData(); setMobileNavOpen(false); }} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700 mb-2">
+                                        {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>} Opdater priser
+                                    </button>
+                                    <label className="flex items-center justify-center gap-2 w-full px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium cursor-pointer">
+                                        <i className="ph ph-upload-simple"></i> Importer CSV
+                                        <input type="file" accept=".csv" className="hidden" onChange={(e) => { handleFileUpload(e); setMobileNavOpen(false); }} />
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* MAIN CONTENT AREA */}
+                    <div className="flex-1 flex flex-col h-full overflow-hidden bg-white">
+
+                        {/* Context Header */}
+                        <div className="h-14 border-b border-gray-100 flex items-center justify-between px-4 md:px-8 shrink-0 bg-white">
+                            <div className="flex items-center gap-3">
+                                <h1 className="text-xl font-bold text-gray-800">
+                                    {view === 'editor' && (filterAccount === 'All' ? 'Alle transaktioner' : `${filterAccount}`)}
+                                    {view === 'dashboard' && 'Oversigt'}
+                                    {view === 'holdings' && 'Beholdninger'}
+                                    {view === 'split' && 'Split-værktøj'}
+                                    {view === 'tax' && `Skatterapport: ${taxYear}`}
+                                </h1>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {statusMsg && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full animate-pulse">{statusMsg}</span>}
+                                {/* Hamburger (right) on small screens */}
+                                <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-gray-700 hover:text-gray-900" aria-label="Open menu">
+                                    <i className="ph ph-list text-2xl"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* VALIDATION WARNING BANNER */}
+                        {schemaErrors.length > 0 && (
+                            <div className="bg-red-50 border-b border-red-200 p-4 max-h-40 overflow-y-auto">
+                                <div className="flex items-center gap-2 text-red-800 font-bold mb-2">
+                                    <i className="ph ph-warning-circle text-xl"></i>
+                                    <span>Dataintegritetsfejl ({schemaErrors.length})</span>
+                                    <button onClick={() => setSchemaErrors([])} className="ml-auto text-xs bg-red-100 hover:bg-red-200 px-2 py-1 rounded text-red-700">Luk</button>
+                                </div>
+                                <ul className="list-disc list-inside text-sm text-red-700 space-y-1 font-mono">
+                                    {schemaErrors.map((e, i) => <li key={i}>{e}</li>)}
+                                </ul>
+                            </div>
+                        )}
+
+                        {/* View Container */}
+                        <div className="flex-1 overflow-auto overflow-x-auto bg-gray-50">
+                            {view === 'editor' && renderEditor()}
+                            {view === 'dashboard' && renderDashboard()}
+                            {view === 'holdings' && renderHoldings()}
+                            {view === 'split' && renderSplitTool()}
+                            {view === 'tax' && renderTaxReport()}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>
