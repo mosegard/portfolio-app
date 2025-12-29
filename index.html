@@ -1357,22 +1357,22 @@
                         </div>
 
                         <div className="card">
-                            <h4 className="font-bold text-md mb-3 flex items-center gap-2"><i className="ph ph-list-magnifying-glass"></i> Details for {taxYear}</h4>
+                            <h4 className="font-bold text-md mb-3 flex items-center gap-2"><i className="ph ph-list-magnifying-glass"></i> Detaljer for {taxYear}</h4>
                             <div className="grid grid-cols-1 gap-6">
 
                                 {/* STOCKS TABLE (Rubrik 66) */}
                                 <div className="bg-white border rounded p-4">
-                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">Stocks Sold — Rubrik 66</h5>
+                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">Aktier solgt — Rubrik 66</h5>
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-xs text-left">
                                             <thead className="bg-gray-50 border-b">
                                                 <tr>
-                                                    <th className="px-3 py-2">Date</th>
+                                                    <th className="px-3 py-2">Dato</th>
                                                     <th className="px-3 py-2">Ticker</th>
-                                                    <th className="px-3 py-2 text-right">Qty</th>
-                                                    <th className="px-3 py-2 text-right">Cost Basis</th>
-                                                    <th className="px-3 py-2 text-right">Proceeds</th>
-                                                    <th className="px-3 py-2 text-right">Gain</th>
+                                                    <th className="px-3 py-2 text-right">Antal</th>
+                                                    <th className="px-3 py-2 text-right">Kostpris</th>
+                                                    <th className="px-3 py-2 text-right">Provenu</th>
+                                                    <th className="px-3 py-2 text-right">Gevinst</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -1394,9 +1394,9 @@
 
                                 {/* ETF DETAILS (Rubrik 38) */}
                                 <div className="bg-white border rounded p-4">
-                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">ETF Inventory Details — Rubrik 38</h5>
+                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">ETF Lagerdetaljer — Rubrik 38</h5>
                                     <div className="space-y-6">
-                                        {(r.breakdown?.etfs || []).length === 0 && <p className="text-sm text-gray-400 italic">No ETFs taxed this year.</p>}
+                                        {(r.breakdown?.etfs || []).length === 0 && <p className="text-sm text-gray-400 italic">Ingen ETF'er beskattet i år.</p>}
                                         {(r.breakdown?.etfs || []).map((e, i) => (
                                             <div key={i} className="border rounded-lg overflow-hidden text-sm">
                                                 {/* Header */}
@@ -1411,7 +1411,7 @@
                                                             {/* Primo */}
                                                             <tr className="bg-blue-50/30">
                                                                 <td className="px-4 py-2 w-24 font-semibold text-gray-600">Primo</td>
-                                                                <td className="px-4 py-2 text-gray-500">Jan 1 Holdings</td>
+                                                                <td className="px-4 py-2 text-gray-500">1. jan beholdning</td>
                                                                 <td className="px-4 py-2 text-right font-mono">{formatNumber2(e.primoQty)} stk</td>
                                                                 <td className="px-4 py-2 text-right font-mono">{formatCurrency(e.primoVal)}</td>
                                                             </tr>
@@ -1431,14 +1431,14 @@
                                                                 ))
                                                             ) : (
                                                                 <tr className="border-t border-b border-gray-100">
-                                                                    <td colSpan="4" className="px-4 py-2 text-center text-gray-400 italic">No transactions this year</td>
+                                                                    <td colSpan="4" className="px-4 py-2 text-center text-gray-400 italic">Ingen transaktioner i år</td>
                                                                 </tr>
                                                             )}
 
                                                             {/* Ultimo */}
                                                             <tr className="bg-blue-50/30 font-semibold border-b">
                                                                 <td className="px-4 py-2 text-gray-600">Ultimo</td>
-                                                                <td className="px-4 py-2 text-gray-500">Dec 31 Holdings</td>
+                                                                <td className="px-4 py-2 text-gray-500">31. dec beholdning</td>
                                                                 <td className="px-4 py-2 text-right font-mono">{formatNumber2(e.ultimoQty)} stk</td>
                                                                 <td className="px-4 py-2 text-right font-mono">{formatCurrency(e.ultimoVal)}</td>
                                                             </tr>
@@ -1446,7 +1446,7 @@
                                                             {/* Calculation Footer */}
                                                             <tr className="bg-gray-50 text-gray-500">
                                                                 <td colSpan="4" className="px-4 py-2 text-right text-[10px]">
-                                                                    Calculation: {formatCurrency(e.ultimoVal)} (Ultimo) - {formatCurrency(e.primoVal)} (Primo) - {formatCurrency(e.netFlows)} (Net Purchases) = <strong>{formatCurrency(e.gain)}</strong>
+                                                                    Beregning: {formatCurrency(e.ultimoVal)} (Ultimo) - {formatCurrency(e.primoVal)} (Primo) - {formatCurrency(e.netFlows)} (Netto køb) = <strong>{formatCurrency(e.gain)}</strong>
                                                                 </td>
                                                             </tr>
                                                         </tbody>
@@ -1465,10 +1465,10 @@
                                             <table className="w-full text-xs text-left">
                                                 <thead className="bg-gray-50 border-b">
                                                     <tr>
-                                                        <th className="px-3 py-2">Account Type</th>
-                                                        <th className="px-3 py-2 text-right">Total Gain (DKK)</th>
-                                                        <th className="px-3 py-2 text-right">Tax Rate</th>
-                                                        <th className="px-3 py-2 text-right">Calculated Tax</th>
+                                                        <th className="px-3 py-2">Kontotype</th>
+                                                        <th className="px-3 py-2 text-right">Samlet gevinst (DKK)</th>
+                                                        <th className="px-3 py-2 text-right">Skattesats</th>
+                                                        <th className="px-3 py-2 text-right">Beregnet skat</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1483,13 +1483,6 @@
                                                         </td>
                                                     </tr>
                                                 </tbody>
-                                                <tfoot className="bg-gray-50 text-gray-500">
-                                                    <tr>
-                                                        <td colSpan="4" className="px-3 py-2 text-[10px] text-right italic">
-                                                            Note: This tax is typically withdrawn automatically from the ASK account in January/February of the following year.
-                                                        </td>
-                                                    </tr>
-                                                </tfoot>
                                             </table>
                                         </div>
                                     </div>
@@ -1497,19 +1490,19 @@
 
                                 {/* DIVIDENDS TABLE */}
                                 <div className="bg-white border rounded p-4">
-                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">Dividends — Rubrik 61/63</h5>
+                                    <h5 className="text-sm font-bold text-gray-700 uppercase mb-3">Udbytte — Rubrik 61/63</h5>
                                     <div className="overflow-auto max-h-72 custom-scrollbar border rounded">
                                         <table className="w-full text-xs text-left">
                                             <thead className="bg-gray-50 sticky top-0">
                                                 <tr>
-                                                    <th className="px-3 py-2">Date</th>
+                                                    <th className="px-3 py-2">Dato</th>
                                                     <th className="px-3 py-2">Ticker</th>
-                                                    <th className="px-3 py-2 text-right">Amount</th>
-                                                    <th className="px-3 py-2 text-right">Tax Withheld</th>
+                                                    <th className="px-3 py-2 text-right">Beløb</th>
+                                                    <th className="px-3 py-2 text-right">Tilbageholdt skat</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y">
-                                                {(r.breakdown?.dividends || []).length === 0 && <tr><td className="px-3 py-3 text-gray-400 italic" colSpan="4">No dividends</td></tr>}
+                                                {(r.breakdown?.dividends || []).length === 0 && <tr><td className="px-3 py-3 text-gray-400 italic" colSpan="4">Ingen udbytte</td></tr>}
                                                 {(r.breakdown?.dividends || []).map((d, i) => (
                                                     <tr key={i} className="hover:bg-gray-50">
                                                         <td className="px-3 py-2">{d.date}</td>
@@ -1650,18 +1643,18 @@
                                             </div>
                                             {/* Gain Row */}
                                             <div className="flex justify-between items-center text-xs text-gray-500 mb-1">
-                                                <span>Gain/Loss (DKK)</span>
+                                                <span>Gevinst/Tab</span>
                                                 <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrency(stat.gainAbs)}</span>
                                             </div>
                                             {/* Flow Row */}
                                             <div className="flex justify-between items-center text-xs text-gray-500">
-                                                <span>Net Capital Flow</span>
+                                                <span>Kapitalstrøm</span>
                                                 <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrency(stat.breakdown.in)}\nOut: ${formatCurrency(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrency(stat.flow)}</span>
                                             </div>
                                         </div>
                                     ))}
                                     {calc.yearlyStats.length === 0 && (
-                                        <div className="p-8 text-center text-gray-400 italic">No data available</div>
+                                        <div className="p-8 text-center text-gray-400 italic">Ingen data tilgængelig</div>
                                     )}
                                 </div>
                             </div>
@@ -1672,7 +1665,7 @@
                             <div className="lg:col-span-2 space-y-8">
                                 {/* Value Graph */}
                                 <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Portfolio Value</h3>
+                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Porteføljens Værdi</h3>
                                     <ResponsiveContainer width="100%" height={280}>
                                         <AreaChart data={calc.totalValueGraph} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
                                             <defs>
@@ -1716,7 +1709,7 @@
 
                                 {/* Growth Graph */}
                                 <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Time-Weighted Return (%)</h3>
+                                    <h3 className="font-bold text-gray-800 mb-6 text-sm uppercase tracking-wide">Tidsvægtet Afkast (%)</h3>
                                     <ResponsiveContainer width="100%" height={280}>
                                         <AreaChart data={calc.growthGraphData} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
                                             <defs>
@@ -1764,7 +1757,7 @@
                             <div className="hidden lg:block">
                                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden sticky top-6">
                                     <div className="p-4 border-b border-gray-100 bg-gray-50">
-                                        <h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Performance by Year</h3>
+                                        <h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Afkast pr. år</h3>
                                     </div>
                                     <div className="divide-y divide-gray-100">
                                         {calc.yearlyStats.map(stat => (
@@ -1775,18 +1768,18 @@
                                                 </div>
                                                 {/* Gain Row */}
                                                 <div className="flex justify-between items-center text-xs text-gray-500 mb-1">
-                                                    <span>Gain/Loss (DKK)</span>
+                                                    <span>Gevinst/Tab</span>
                                                     <span className={`font-mono font-medium ${stat.gainAbs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.gainAbs > 0 ? '+' : ''}{formatCurrency(stat.gainAbs)}</span>
                                                 </div>
                                                 {/* Flow Row */}
                                                 <div className="flex justify-between items-center text-xs text-gray-500">
-                                                    <span>Net Capital Flow</span>
+                                                    <span>Kapitalstrøm</span>
                                                     <span className="font-mono font-medium cursor-help border-b border-dotted border-gray-300" title={`In: ${formatCurrency(stat.breakdown.in)}\nOut: ${formatCurrency(stat.breakdown.out)}`}>{stat.flow > 0 ? '+' : ''}{formatCurrency(stat.flow)}</span>
                                                 </div>
                                             </div>
                                         ))}
                                         {calc.yearlyStats.length === 0 && (
-                                            <div className="p-8 text-center text-gray-400 italic">No data available</div>
+                                            <div className="p-8 text-center text-gray-400 italic">Ingen data tilgængelig</div>
                                         )}
                                     </div>
                                 </div>
