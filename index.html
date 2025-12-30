@@ -1899,28 +1899,46 @@
                 }
 
                 // Range Selector Component
-                const RangeSelector = () => (
-                    <div className="flex bg-gray-100 p-0.5 rounded-lg flex-wrap gap-1">
-                        {(() => {
-                            const currentYear = new Date().getFullYear().toString();
-                            const baseRanges = years.includes(currentYear)
-                                ? ['1M', 'ALL']
-                                : ['1M', 'YTD', 'ALL'];
-                            return [...baseRanges, ...years].map(r => (
-                                <button
-                                    key={r}
-                                    onClick={() => setGraphRange(r)}
-                                    className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${graphRange === r
-                                        ? 'bg-white text-blue-600 shadow-sm'
-                                        : 'text-gray-400 hover:text-gray-600'
-                                        }`}
+                const RangeSelector = () => {
+                    const currentYear = new Date().getFullYear().toString();
+                    const baseRanges = years.includes(currentYear)
+                        ? ['1M', 'ALL']
+                        : ['1M', 'YTD', 'ALL'];
+                    const options = [...baseRanges, ...years];
+                    return (
+                        <>
+                            {/* Dropdown for small screens */}
+                            <div className="block xl:hidden">
+                                <select
+                                    className="px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200"
+                                    value={graphRange}
+                                    onChange={e => setGraphRange(e.target.value)}
                                 >
-                                    {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r}
-                                </button>
-                            ));
-                        })()}
-                    </div>
-                );
+                                    {options.map(r => (
+                                        <option key={r} value={r}>
+                                            {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            {/* Button group for medium and up */}
+                            <div className="hidden xl:flex bg-gray-100 p-0.5 rounded-lg flex-wrap gap-1">
+                                {options.map(r => (
+                                    <button
+                                        key={r}
+                                        onClick={() => setGraphRange(r)}
+                                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${graphRange === r
+                                            ? 'bg-white text-blue-600 shadow-sm'
+                                            : 'text-gray-400 hover:text-gray-600'
+                                            }`}
+                                    >
+                                        {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r}
+                                    </button>
+                                ))}
+                            </div>
+                        </>
+                    );
+                };
 
                 // 1. HELPER: Convert Date String (YYYY-MM-DD) to Unix Timestamp (number)
                 const toUnix = (dateStr) => new Date(dateStr).getTime();
