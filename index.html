@@ -1213,7 +1213,19 @@
 
             // 2. HOLDINGS
             const renderHoldings = () => {
-                const list = Object.values(calc.portfolio).filter(p => Math.abs(p.qty) > 0.01);
+                let list = Object.values(calc.portfolio).filter(p => Math.abs(p.qty) > 0.01);
+                // Sort by value (værdi) descending
+                list = list.slice().sort((a, b) => {
+                    const mA = marketData[a.ticker] || {};
+                    const mB = marketData[b.ticker] || {};
+                    const priceA = mA.price || 0;
+                    const priceB = mB.price || 0;
+                    const fxA = (marketData[`${a.cur}DKK=X`] || {}).price || 1;
+                    const fxB = (marketData[`${b.cur}DKK=X`] || {}).price || 1;
+                    const valA = a.qty * priceA * fxA;
+                    const valB = b.qty * priceB * fxB;
+                    return valB - valA;
+                });
                 const nowSec = Math.floor(Date.now() / 1000);
 
                 // --- CALCULATE TOTALS ---
