@@ -604,7 +604,7 @@
             const years = useMemo(() => {
                 const yr = new Set(txs.map(t => t.date.getFullYear().toString()));
                 yr.add(new Date().getFullYear().toString()); // Always include current year
-                return [...yr].sort(); // Ascending for selector
+                return [...yr].sort().reverse(); // Descending: most recent year first
             }, [txs]);
 
             const fetchMarketData = async (silent = false) => {
