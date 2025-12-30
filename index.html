@@ -604,7 +604,7 @@
             const years = useMemo(() => {
                 const yr = new Set(txs.map(t => t.date.getFullYear().toString()));
                 yr.add(new Date().getFullYear().toString()); // Always include current year
-                return [...yr].sort().reverse();
+                return [...yr].sort(); // Ascending for selector
             }, [txs]);
 
             const fetchMarketData = async (silent = false) => {
@@ -1588,7 +1588,7 @@
                                         </div>
                                         {(r.paidTax || 0) > 0 && (
                                             <div className="flex justify-between text-green-600">
-                                                <span>Aconto indbetalt</span>
+                                                <span>Allerede betalt</span>
                                                 <span>-{formatCurrencyNoDecimals(r.paidTax)}</span>
                                             </div>
                                         )}
@@ -1668,13 +1668,7 @@
                                                 </div>
                                             )}
 
-                                            <div className="flex justify-between items-center text-sm border-b border-gray-50 pb-2 mt-2">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="bg-teal-50 text-teal-700 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded text-xs">17%</span>
-                                                    <span className="text-gray-600">Beregnet Skat</span>
-                                                </div>
-                                                <span className="font-mono font-medium text-gray-900">{formatCurrencyNoDecimals(r.askTax)}</span>
-                                            </div>
+
                                         </div>
                                     )}
                                 </div>
@@ -1833,12 +1827,24 @@
 
                     const now = new Date();
                     let startDate = new Date();
+                    let endDate = null;
 
-                    if (graphRange === '1M') startDate.setMonth(now.getMonth() - 1);
-                    else if (graphRange === 'YTD') startDate = new Date(now.getFullYear(), 0, 1); // Jan 1st this year
+                    if (graphRange === '1M') {
+                        startDate.setMonth(now.getMonth() - 1);
+                    } else if (graphRange === 'YTD') {
+                        startDate = new Date(now.getFullYear(), 0, 1); // Jan 1st this year
+                    } else if (!isNaN(Number(graphRange))) {
+                        // Specific year selected
+                        startDate = new Date(Number(graphRange), 0, 1);
+                        endDate = new Date(Number(graphRange), 11, 31);
+                    }
 
                     const isoStart = getLocalISO(startDate);
-                    const sliced = dataset.filter(d => d.date >= isoStart);
+                    let sliced = dataset.filter(d => d.date >= isoStart);
+                    if (endDate) {
+                        const isoEnd = getLocalISO(endDate);
+                        sliced = sliced.filter(d => d.date <= isoEnd);
+                    }
 
                     // For Growth Graph: Re-base to 0% at start of period
                     if (isGrowth && sliced.length > 0) {
@@ -1894,19 +1900,25 @@
 
                 // Range Selector Component
                 const RangeSelector = () => (
-                    <div className="flex bg-gray-100 p-0.5 rounded-lg">
-                        {['1M', 'YTD', 'ALL'].map(r => (
-                            <button
-                                key={r}
-                                onClick={() => setGraphRange(r)}
-                                className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${graphRange === r
-                                    ? 'bg-white text-blue-600 shadow-sm'
-                                    : 'text-gray-400 hover:text-gray-600'
-                                    }`}
-                            >
-                                {r}
-                            </button>
-                        ))}
+                    <div className="flex bg-gray-100 p-0.5 rounded-lg flex-wrap gap-1">
+                        {(() => {
+                            const currentYear = new Date().getFullYear().toString();
+                            const baseRanges = years.includes(currentYear)
+                                ? ['1M', 'ALL']
+                                : ['1M', 'YTD', 'ALL'];
+                            return [...baseRanges, ...years].map(r => (
+                                <button
+                                    key={r}
+                                    onClick={() => setGraphRange(r)}
+                                    className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${graphRange === r
+                                        ? 'bg-white text-blue-600 shadow-sm'
+                                        : 'text-gray-400 hover:text-gray-600'
+                                        }`}
+                                >
+                                    {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r}
+                                </button>
+                            ));
+                        })()}
                     </div>
                 );
 
