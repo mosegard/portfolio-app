@@ -216,8 +216,8 @@
         const CURRENCY_OPTIONS = ['DKK', 'USD', 'EUR', 'NOK', 'SEK', 'GBP'];
 
         const TAX_LIMITS = {
-            '2026': 61000,
-            '2025': 61000,
+            '2026': 79400,
+            '2025': 67500,
             '2024': 61000,
             '2023': 58900,
             '2022': 57200,
@@ -1412,11 +1412,11 @@
                 return candidates.sort((a, b) => b.ratio - a.ratio);
             }, [txs, marketData]);
 
-           // --- VIEW RENDERERS ---
+            // --- VIEW RENDERERS ---
             const renderTaxReport = () => {
                 // Ensure default values exist for new loss fields
-                const r = calc.reports[taxYear] || { 
-                    rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0, 
+                const r = calc.reports[taxYear] || {
+                    rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0,
                     askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
                     utilizedLossNormal: 0, carriedLossNormal: 0, utilizedLossAsk: 0, carriedLossAsk: 0
                 };
@@ -1426,14 +1426,14 @@
 
                 // --- 1. CALCULATIONS ---
                 const shareIncome = (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0);
-                
+
                 // Taxable Income = Gross Income - Utilized Loss
                 const taxableIncome = Math.max(0, shareIncome - r.utilizedLossNormal);
 
                 // Tax Limits (27% bracket limit)
                 const limitBase = TAX_LIMITS[taxYear] || 61000;
                 const limitActual = limitBase * (settings.married ? 2 : 1);
-                
+
                 // Normal Tax Calculation (Based on Taxable Income, NOT Raw Income)
                 let taxBill = 0;
                 let tax27 = 0;
@@ -1449,7 +1449,7 @@
                         taxBill = tax27 + tax42;
                     }
                 }
-                
+
                 // Capital Income Tax (Rubrik 345)
                 const kapIncomeTax = (r.rubrik345 || 0) * 0.42;
                 taxBill += kapIncomeTax;
@@ -1462,45 +1462,68 @@
 
                 return (
                     <div className="p-6 md:p-8 space-y-6 max-w-6xl mx-auto animate-in fade-in duration-300">
-                        
+
                         {/* 1. SUMMARIES ROW */}
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                            
+
                             {/* LEFT: NORMAL TAX (Frie Midler) */}
-                            <div className="card flex flex-col h-full">
-                                {/* Header */}
-                                <div className="flex justify-between items-start mb-6">
+                            <div className="card flex flex-col h-full relative overflow-hidden">
+
+                                {/* 1. Header & Hero Value */}
+                                <div className="flex justify-between items-end mb-2">
                                     <div>
                                         <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
-                                            <i className="ph ph-briefcase text-blue-600"></i> Alm. Aktieindkomst
+                                            <i className="ph ph-briefcase text-blue-600"></i>Aktieindkomst
                                         </h3>
                                     </div>
                                     <div className="text-right">
-                                        <div className={`text-xl font-bold ${taxableIncome >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrencyNoDecimals(taxableIncome)}</div>
+                                        <div className={`text-2xl font-bold leading-none ${taxableIncome >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                                            {formatCurrencyNoDecimals(taxableIncome)}
+                                        </div>
                                     </div>
                                 </div>
+                                {/* 2. Minimalist Single-Line Bar */}
+                                <div className="mb-8 flex items-center gap-3">
+                                    {/* The Bar Track */}
+                                    <div className="relative h-2.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
 
-                                {/* Progress Bar */}
-                                <div className="mb-8">
-                                    <div className="flex justify-between text-xs font-semibold text-gray-500 mb-2">
-                                        <span>0 kr</span>
-                                        <span>27% Grænse ({formatCurrencyNoDecimals(limitActual, 'DKK').replace(',00', '')})</span>
+                                        {/* Safe Zone (Blue) */}
+                                        <div
+                                            className="absolute top-0 left-0 h-full bg-blue-600 transition-all duration-500 ease-out"
+                                            style={{
+                                                width: `${Math.min(100, (Math.min(taxableIncome, limitActual) / Math.max(taxableIncome, limitActual)) * 100)}%`,
+                                                zIndex: 2
+                                            }}
+                                        />
+
+                                        {/* Danger Zone (Orange) - Appears if limit exceeded */}
+                                        {taxableIncome > limitActual && (
+                                            <div
+                                                className="absolute top-0 left-0 h-full bg-orange-500 transition-all duration-500 ease-out"
+                                                style={{
+                                                    width: '100%',
+                                                    // Visual trick: Clip the left side based on where the limit is
+                                                    clipPath: `inset(0 0 0 ${Math.min(100, (limitActual / taxableIncome) * 100)}%)`
+                                                }}
+                                            />
+                                        )}
+
+                                        {/* Subtle white separator line to mark the 27/42 cut-off point */}
+                                        <div
+                                            className="absolute top-0 bottom-0 w-[2px] bg-white z-10 opacity-50 mix-blend-overlay"
+                                            style={{
+                                                left: `${taxableIncome > limitActual ? (limitActual / taxableIncome) * 100 : 100}%`
+                                            }}
+                                        />
                                     </div>
-                                    <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-                                        <div 
-                                            className={`h-full ${taxableIncome > limitActual ? 'bg-orange-500' : taxableIncome === 0 ? 'bg-transparent' : 'bg-blue-600'}`} 
-                                            style={{width: `${progressPct}%`}}
-                                        ></div>
-                                    </div>
-                                    <div className="mt-2 text-right text-[10px] text-gray-400">
-                                        {taxableIncome > limitActual 
-                                            ? <span className="text-orange-600 font-medium">Du betaler 42% af det overskydende beløb</span> 
-                                            : <span>Du holder dig inden for 27% grænsen</span>
-                                        }
-                                    </div>
+
+                                    {/* The Percentage Label */}
+                                    <span className={`text-xs font-bold font-mono min-w-[3.5rem] text-right ${taxableIncome > limitActual ? 'text-orange-500' : 'text-blue-600'}`}>
+                                        {taxableIncome > 0 ? ((taxBill / taxableIncome) * 100).toFixed(1) : '0.0'}%
+                                    </span>
                                 </div>
 
-                                {/* Rubrik List */}
+                                {/* 3. Rubrik List */}
                                 <div className="space-y-3 mb-6 flex-1">
                                     {[
                                         { label: 'Gevinst/tab aktier', rubrik: '66', val: r.rubrik66 },
@@ -1520,8 +1543,8 @@
                                             </span>
                                         </div>
                                     ))}
-                                    
-                                    {/* --- NEW: UTILIZED LOSS ROW --- */}
+
+                                    {/* Utilized Loss */}
                                     {r.utilizedLossNormal > 0 && (
                                         <div className="flex justify-between items-center text-sm pt-2 text-green-700 bg-green-50 p-2 rounded border border-green-100">
                                             <div className="flex items-center gap-2">
@@ -1532,7 +1555,7 @@
                                         </div>
                                     )}
 
-                                    {/* --- NEW: CARRIED LOSS ROW (If result is still negative) --- */}
+                                    {/* Carried Loss */}
                                     {r.carriedLossNormal > 0 && shareIncome < 0 && (
                                         <div className="flex justify-between items-center text-sm pt-2 text-gray-500 italic">
                                             <span>Tab til fremførsel (næste år)</span>
@@ -1540,6 +1563,7 @@
                                         </div>
                                     )}
 
+                                    {/* Capital Income */}
                                     {r.rubrik345 !== 0 && (
                                         <div className="flex justify-between items-center text-sm pt-2 mt-2 border-t border-gray-100 border-dashed">
                                             <div className="flex items-center gap-2">
@@ -1551,7 +1575,7 @@
                                     )}
                                 </div>
 
-                                {/* Summary Footer */}
+                                {/* 4. Summary Footer */}
                                 <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-gray-100 rounded-b-xl mt-auto">
                                     <div className="space-y-1 text-sm mb-3">
                                         <div className="flex justify-between text-gray-500">
@@ -1576,7 +1600,7 @@
                                         </span>
                                     </div>
 
-                                    {/* HYPOTHETICAL LIQUIDATION (Current Year Only) */}
+                                    {/* Liquidation Note */}
                                     {isCurrentYear && (
                                         <div className="mt-4 pt-3 border-t border-dashed border-gray-300">
                                             <div className="flex justify-between items-center">
