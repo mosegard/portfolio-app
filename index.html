@@ -3050,19 +3050,7 @@ Proceed?`;
 
                     {/* SIDEBAR NAVIGATION (hidden on small screens) */}
                     <div className="hidden md:flex md:w-64 bg-gray-50 border-r border-gray-200 flex-col shrink-0">
-                        <div className="p-5 border-b border-gray-200 flex items-center justify-center md:justify-between relative">
-                            {/* Update button on mobile (left) */}
-                            <button
-                                onClick={fetchMarketData}
-                                className="absolute left-0 top-1/2 -translate-y-1/2 p-2 w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-blue-50 text-blue-600 text-lg shadow-sm flex items-center justify-center md:hidden"
-                                title="Opdater priser"
-                            >
-                                {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>}
-                            </button>
-                            <div className="font-bold text-lg flex items-center gap-2 justify-center w-full md:w-auto text-center">
-                                <i className="ph ph-wallet text-blue-600"></i> Portefølje
-                            </div>
-                        </div>
+
 
                         <div className="flex-1 overflow-y-auto p-3 space-y-2">
 
@@ -3140,7 +3128,8 @@ Proceed?`;
                     {mobileNavOpen && (
                         <div className="fixed inset-0 z-50 md:hidden">
                             <div className="absolute inset-0 bg-black/40" onClick={() => setMobileNavOpen(false)}></div>
-                            <div className="absolute top-0 right-0 w-64 h-full bg-white shadow-xl border-l border-gray-200 flex flex-col z-10">
+                            {/* CHANGED: right-0 -> left-0 AND border-l -> border-r */}
+                            <div className="absolute top-0 left-0 w-64 h-full bg-white shadow-xl border-r border-gray-200 flex flex-col z-10">
                                 <div className="p-5 border-b border-gray-200 flex justify-between items-center">
                                     <div className="font-bold text-lg flex items-center gap-2"><i className="ph ph-wallet text-blue-600"></i> Menu</div>
                                     <button onClick={() => setMobileNavOpen(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x"></i></button>
@@ -3205,7 +3194,7 @@ Proceed?`;
                                     </button>
                                 </div>
 
-                                {/* Bottom Actions: Only Settings button for mobile */}
+                                {/* Bottom Actions */}
                                 <div className="p-4 border-t border-gray-200 flex flex-col gap-2">
                                     <button onClick={() => { setShowSettings(true); setMobileNavOpen(false); }} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 text-gray-700">
                                         <i className="ph ph-gear-six"></i> Indstillinger
@@ -3220,15 +3209,17 @@ Proceed?`;
 
                         {/* Context Header */}
                         <div className="h-14 border-b border-gray-100 flex items-center justify-between px-4 md:px-8 shrink-0 bg-white relative">
-                            {/* Reload button on mobile (left) */}
+
+                            {/* 1. LEFT: Hamburger Menu (Mobile Only) - Moved here */}
                             <button
-                                onClick={fetchMarketData}
-                                className="absolute left-2 top-1/2 -translate-y-1/2 p-2 w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-blue-50 text-blue-600 text-lg shadow-sm flex items-center justify-center md:hidden"
-                                title="Opdater priser"
+                                onClick={() => setMobileNavOpen(true)}
+                                className="md:hidden p-2 -ml-2 text-gray-700 hover:text-gray-900"
+                                aria-label="Open menu"
                             >
-                                {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>}
+                                <i className="ph ph-list text-2xl"></i>
                             </button>
-                            {/* Headline centered on mobile, left on desktop */}
+
+                            {/* 2. CENTER/LEFT: Title */}
                             <div className="flex-1 flex items-center justify-center md:justify-start">
                                 <h1 className="text-xl font-bold text-gray-800 text-center w-full md:w-auto">
                                     {view === 'editor' && (filterAccount === 'All' ? 'Alle transaktioner' : `${filterAccount}`)}
@@ -3238,20 +3229,19 @@ Proceed?`;
                                     {view === 'tax' && `Skatterapport: ${taxYear}`}
                                 </h1>
                             </div>
+
+                            {/* 3. RIGHT: Single Unified Update Button */}
                             <div className="flex items-center gap-2">
-                                {/* Small Opdater priser button - hidden on mobile, round always */}
                                 <button
-                                    onClick={fetchMarketData}
-                                    className="p-2 w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-blue-50 text-blue-600 text-lg shadow-sm flex items-center justify-center hidden md:flex"
-                                    title="Opdater priser"
+                                    onClick={() => fetchMarketData(false)}
+                                    className="p-2 w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-blue-50 text-blue-600 text-lg shadow-sm flex items-center justify-center"
+                                    title={lastUpdate ? `Sidst opdateret: ${lastUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : "Opdater priser"}
                                 >
                                     {loading ? <i className="ph ph-spinner animate-spin"></i> : <i className="ph ph-arrows-clockwise"></i>}
                                 </button>
-                                {statusMsg && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full animate-pulse">{statusMsg}</span>}
-                                {/* Hamburger (right) on small screens */}
-                                <button onClick={() => setMobileNavOpen(true)} className="md:hidden text-gray-700 hover:text-gray-900" aria-label="Open menu">
-                                    <i className="ph ph-list text-2xl"></i>
-                                </button>
+
+                                {/* Status Message Bubble */}
+                                {statusMsg && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded-full animate-pulse hidden sm:inline-block">{statusMsg}</span>}
                             </div>
                         </div>
 
