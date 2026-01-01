@@ -229,6 +229,11 @@
             '2017': 51700
         };
 
+        const calculateDanishTax = (amount, limit) => {
+            if (amount <= 0) return 0;
+            if (amount <= limit) return amount * 0.27;
+            return (limit * 0.27) + ((amount - limit) * 0.42);
+        };
 
         const toPrettyDate = (danishDate) => {
             if (!danishDate || danishDate.length < 8) return danishDate;
@@ -516,6 +521,70 @@
             return txs;
         }
 
+        // -- NUMBER INPUT COMPONENT ---
+        const NumberInput = ({ row, fieldKey, rawKey, setRows, extraClass = "", title = "" }) => {
+            // Safety check: If row is missing, don't render input to prevent crash
+            if (!row) return null;
+
+            // 1. Determine Value: Use the "Raw" buffer if user is typing, otherwise format the stored number
+            const displayValue = row[rawKey] !== undefined
+                ? row[rawKey]
+                : formatDanishNumber(row[fieldKey], 10);
+
+            // 2. Handle Change: Update the buffer (allow text like "10,")
+            const handleChange = (e) => {
+                const newVal = e.target.value;
+                setRows(prev => {
+                    const n = [...prev];
+                    // Ensure the row exists before writing
+                    if (n[row._idx]) {
+                        n[row._idx] = { ...n[row._idx], [rawKey]: newVal };
+                    }
+                    return n;
+                });
+            };
+
+            // 3. Handle Blur: Parse the buffer into a real number and clean up
+            const handleBlur = () => {
+                setRows(prev => {
+                    const n = [...prev];
+                    if (n[row._idx] && n[row._idx][rawKey] !== undefined) {
+                        n[row._idx][fieldKey] = parseDanishNumber(n[row._idx][rawKey]);
+                        // Remove the "Raw" key so we switch back to formatted view
+                        delete n[row._idx][rawKey];
+                    }
+                    return n;
+                });
+            };
+
+            // 4. Handle Enter Key: Blur and move focus
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    e.target.blur();
+                    // Simple navigation to next input in the row
+                    const currentRow = e.target.closest('tr');
+                    if (currentRow) {
+                        const inputs = Array.from(currentRow.querySelectorAll('input, select'));
+                        const index = inputs.indexOf(e.target);
+                        const nextInput = e.shiftKey ? inputs[index - 1] : inputs[index + 1];
+                        if (nextInput) nextInput.focus();
+                    }
+                }
+            };
+
+            return (
+                <input
+                    inputMode="decimal"
+                    className={`w-16 input-base p-1 rounded text-right font-mono ${extraClass}`}
+                    title={title}
+                    value={displayValue}
+                    onChange={handleChange}
+                    onBlur={handleBlur}
+                    onKeyDown={handleKeyDown}
+                />
+            );
+        };
+
         // --- CUSTOM DATE PICKER COMPONENT ---
         const FlatpickrDate = ({ value, onChange, onKeyDown }) => {
             const inputRef = React.useRef(null);
@@ -580,6 +649,8 @@
             const [filters, setFilters] = useState({});
             const [splitParams, setSplitParams] = useState({ ticker: '', num: 2, den: 1, dateIso: '', startDateIso: '', endDateIso: '' });
             const [graphRange, setGraphRange] = useState('ALL'); // '1M', 'YTD', 'ALL'
+
+            const [showGainModal, setShowGainModal] = useState(false);
 
             useEffect(() => {
                 const saved = localStorage.getItem('gh_config');
@@ -731,92 +802,131 @@
 
             // --- MASTER CALCULATION ENGINE ---
             const calc = useMemo(() => {
+                // =================================================================================
+                // 1. INITIALIZATION
+                // =================================================================================
                 let portfolio = {};
-                let reports = {};
                 let totalValueGraph = [];
                 let growthGraphData = [];
+                const executionWarnings = [];
+
+                // Track weighted average cost GLOBALLY for stocks (Realization Principle)
+                const globalStockState = {};
+                const yearIndex = {};
 
                 const etfKeys = new Set();
                 const askKeys = new Set();
                 const keyInfo = {};
                 const currencyMap = {};
-                const globalState = {};
 
-                // --- PRICE FINDER ---
+                // --- HELPER: Tax Limits (Loud Failure) ---
+                const getTaxLimit = (year) => {
+                    if (TAX_LIMITS[year]) return TAX_LIMITS[year];
+                    executionWarnings.push(`CRITICAL: Missing Tax Limit for year ${year}.`);
+                    return 0;
+                };
+
+                // --- HELPER: Price Lookup (RESTORED FALLBACK) ---
                 const getPrice = (t, dStr) => {
+                    // 1. Try Market Data (Yahoo)
                     const m = marketData[t];
-                    if (m && m.history && m.history.length > 0) {
+                    if (m?.history?.length) {
                         const hit = m.history.find(h => h.date === dStr);
                         if (hit) return hit.close;
-                        const prev = m.history.filter(h => h.date < dStr).pop();
-                        if (prev) return prev.close;
+                        const prev = m.history.filter(h => h.date < dStr);
+                        if (prev.length) return prev[prev.length - 1].close;
                     }
-                    // Fallback: Use the last known transaction price for this ticker
-                    const relevantTxs = txs.filter(tx => tx.ticker === t && getLocalISO(tx.date) <= dStr);
-                    if (relevantTxs.length > 0) return relevantTxs[relevantTxs.length - 1].price;
+
+                    // 2. Transaction Fallback (Restored)
+                    // If no market data, use the last known transaction price.
+                    // Iterate backwards for performance (txs is sorted by date)
+                    for (let i = txs.length - 1; i >= 0; i--) {
+                        const tx = txs[i];
+                        // Only check this ticker, and ensure we don't look into the future relative to dStr
+                        if (tx.ticker === t) {
+                            const txDate = getLocalISO(tx.date);
+                            if (txDate <= dStr) return tx.price;
+                        }
+                    }
                     return 0;
                 };
 
                 const getFx = (c, dStr) => {
                     if (!c || c === 'DKK') return 1;
-                    return getPrice(`${c}DKK=X`, dStr) || 1;
+                    const rate = getPrice(`${c}DKK=X`, dStr);
+                    if (rate === 0) {
+                        executionWarnings.push(`CRITICAL: Missing FX Rate for ${c} on ${dStr}.`);
+                        return 1;
+                    }
+                    return rate;
                 };
 
                 // Init Reports
-                years.forEach(y => {
-                    reports[y] = {
-                        rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0,
-                        withheldTax: 0, askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0,
-                        totalNormalTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
-                        utilizedLossNormal: 0, carriedLossNormal: 0,
-                        utilizedLossAsk: 0, carriedLossAsk: 0
-                    };
+                const reports = {};
+                const reportTemplate = () => ({
+                    rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0,
+                    withheldTax: 0, askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0,
+                    totalNormalTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
+                    utilizedLossNormal: 0, carriedLossNormal: 0,
+                    utilizedLossAsk: 0, carriedLossAsk: 0
                 });
+                years.forEach(y => reports[y] = reportTemplate());
 
-                // 1. Process Transactions (Tax Logic - Unchanged)
+                const addToIndex = (y, key, tx) => {
+                    if (!yearIndex[y]) yearIndex[y] = {};
+                    if (!yearIndex[y][key]) yearIndex[y][key] = [];
+                    yearIndex[y][key].push(tx);
+                };
+
+                // =================================================================================
+                // 2. PASS 1: PROCESS TRANSACTIONS & REALIZATION
+                // =================================================================================
                 txs.forEach(tx => {
                     const y = tx.date.getFullYear().toString();
-                    if (!reports[y]) reports[y] = { rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0, askGain: 0, askTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] } };
+                    if (!reports[y]) reports[y] = reportTemplate();
 
-                    const accountKey = `${tx.ticker}_${tx.account}`;
-                    const isASK = tx.account === config.askAccount;
+                    const key = `${tx.ticker}_${tx.account}`;
                     const globalTickerKey = tx.ticker;
+                    const isASK = tx.account === config.askAccount;
                     const isAssetETF = tx.assetType === 'ETF';
 
-                    if (isAssetETF && !isASK) {
-                        etfKeys.add(accountKey);
-                        keyInfo[accountKey] = { ticker: tx.ticker, account: tx.account, type: 'ETF' };
-                        if (tx.currency) currencyMap[accountKey] = tx.currency;
-                    }
-                    if (isASK) {
-                        askKeys.add(accountKey);
-                        keyInfo[accountKey] = { ticker: tx.ticker, account: tx.account, type: isAssetETF ? 'ETF' : 'Stock' };
-                        if (tx.currency) currencyMap[accountKey] = tx.currency;
+                    if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
+                        addToIndex(y, key, tx);
+                        if (!keyInfo[key]) {
+                            keyInfo[key] = {
+                                ticker: tx.ticker, account: tx.account, cur: tx.currency,
+                                type: isAssetETF ? 'ETF' : 'Stock',
+                                isInventory: isASK || isAssetETF
+                            };
+                            if (tx.currency) currencyMap[key] = tx.currency;
+                            if (isASK) askKeys.add(key);
+                            if (isAssetETF && !isASK) etfKeys.add(key);
+                        }
                     }
 
-                    if (!portfolio[accountKey]) portfolio[accountKey] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency };
-                    const pos = portfolio[accountKey];
+                    if (!portfolio[key]) portfolio[key] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency };
+                    const pos = portfolio[key];
 
-                    if (!isASK && !isAssetETF && !globalState[globalTickerKey]) {
-                        globalState[globalTickerKey] = { totalQty: 0, totalCostDKK: 0, avgPriceDKK: 0 };
+                    if (!isASK && !isAssetETF && !globalStockState[globalTickerKey]) {
+                        globalStockState[globalTickerKey] = { totalQty: 0, totalCostDKK: 0, avgPriceDKK: 0 };
                     }
-                    const glob = globalState[globalTickerKey];
+                    const glob = globalStockState[globalTickerKey];
 
                     const dStr = getLocalISO(tx.date);
+                    const accCur = config.currencies[tx.account] || 'DKK';
+                    const accFx = getFx(accCur, dStr);
                     const valDKK = Math.abs(tx.qty) * tx.price * tx.fxRate;
-                    const accountCur = config.currencies[tx.account] || 'DKK';
-                    const accFx = getFx(accountCur, dStr);
                     const commissionDKK = tx.commission * accFx;
                     const taxDKK = tx.tax * accFx;
 
                     if (tx.type === 'DIVIDEND') {
-                        const amtDKK = tx.qty * (tx.price || 1) * tx.fxRate;
+                        const amtDKK = tx.qty * (tx.price ?? 1) * tx.fxRate;
                         if (isASK) reports[y].askGain += amtDKK;
                         else {
                             if (tx.currency === 'DKK') reports[y].rubrik61 += amtDKK;
                             else reports[y].rubrik63 += amtDKK;
-                            reports[y].withheldTax += taxDKK || 0;
-                            reports[y].breakdown.dividends.push({ date: getLocalISO(tx.date), ticker: tx.ticker, account: tx.account, amount: amtDKK, withheldTax: taxDKK || 0 });
+                            reports[y].withheldTax += (taxDKK || 0);
+                            reports[y].breakdown.dividends.push({ date: dStr, ticker: tx.ticker, account: tx.account, amount: amtDKK, withheldTax: taxDKK || 0 });
                         }
                     }
                     else if (tx.qty < 0 && (tx.assetType === 'Cash' || tx.type === 'TRANSFER' || !tx.ticker)) {
@@ -834,6 +944,7 @@
                     else if (tx.type === 'BUY') {
                         pos.qty += tx.qty;
                         const totalCostDKK = valDKK + commissionDKK;
+
                         if (isASK || isAssetETF) {
                             pos.cost += totalCostDKK;
                             pos.avg = pos.qty ? pos.cost / pos.qty : 0;
@@ -841,13 +952,13 @@
                             glob.totalQty += tx.qty;
                             glob.totalCostDKK += totalCostDKK;
                             glob.avgPriceDKK = glob.totalQty ? glob.totalCostDKK / glob.totalQty : 0;
-                            pos.avg = glob.avgPriceDKK;
                         }
                     }
                     else if (tx.type === 'SELL') {
                         const proceeds = valDKK - commissionDKK;
                         const sellQty = Math.abs(tx.qty);
                         pos.qty -= sellQty;
+
                         if (isASK || isAssetETF) {
                             pos.cost -= (sellQty * pos.avg);
                         } else {
@@ -856,39 +967,69 @@
                             glob.totalQty -= sellQty;
                             glob.totalCostDKK -= costBasis;
                             reports[y].rubrik66 += gain;
-                            reports[y].breakdown.stocks.push({ date: getLocalISO(tx.date), ticker: tx.ticker, account: tx.account, qty: sellQty, gain, costBasis, proceeds });
+                            reports[y].breakdown.stocks.push({ date: dStr, ticker: tx.ticker, account: tx.account, qty: sellQty, gain, costBasis, proceeds });
                         }
                     }
                 });
 
-                // 2. Inventory Loop (Tax Logic - Unchanged)
-                years.forEach(y => {
+                // --- 2.5 SYNC STEP ---
+                Object.values(portfolio).forEach(p => {
+                    const pKey = `${p.ticker}_${p.acc}`;
+                    if (!keyInfo[pKey]?.isInventory && globalStockState[p.ticker]) {
+                        p.avg = globalStockState[p.ticker].avgPriceDKK;
+                        p.cost = p.qty * p.avg;
+                    }
+                });
+
+                // =================================================================================
+                // 3. PASS 2: INVENTORY LOOP
+                // =================================================================================
+                const allYearsSorted = [...years].sort();
+                const allInventoryKeys = new Set([...etfKeys, ...askKeys]);
+                const runningQtyMap = {};
+                allInventoryKeys.forEach(k => runningQtyMap[k] = 0);
+
+                allYearsSorted.forEach(y => {
                     const primoDate = `${y}-01-01`;
                     const ultimoDate = `${y}-12-31`;
-                    const allInventoryKeys = new Set([...etfKeys, ...askKeys]);
+
                     allInventoryKeys.forEach(key => {
                         const { ticker, account } = keyInfo[key];
                         const cur = currencyMap[key] || 'DKK';
                         const isAccountASK = account === config.askAccount;
-                        let startQty = 0, endQty = 0, flows = 0, yearTransactions = [];
-                        txs.forEach(tx => {
-                            if (`${tx.ticker}_${tx.account}` !== key) return;
+
+                        const startQty = runningQtyMap[key];
+                        const pricePrimo = getPrice(ticker, primoDate);
+                        const fxPrimo = getFx(cur, primoDate);
+                        const primoVal = startQty * pricePrimo * fxPrimo;
+
+                        let flows = 0;
+                        let yearTransactions = [];
+                        const relevantTxs = (yearIndex[y] && yearIndex[y][key]) ? yearIndex[y][key] : [];
+
+                        relevantTxs.forEach(tx => {
+                            runningQtyMap[key] += tx.qty;
                             const dStr = getLocalISO(tx.date);
-                            if (tx.type === 'BUY' || tx.type === 'SELL') {
-                                if (dStr < primoDate) startQty += tx.qty;
-                                if (dStr <= ultimoDate) endQty += tx.qty;
-                            }
-                            if (dStr >= primoDate && dStr <= ultimoDate && (tx.type === 'BUY' || tx.type === 'SELL')) {
-                                const valRaw = Math.abs(tx.qty * tx.price * tx.fxRate);
-                                const accCur = config.currencies[tx.account] || 'DKK';
-                                const costRaw = tx.commission * getFx(accCur, dStr);
-                                if (tx.type === 'BUY') { flows += (valRaw + costRaw); yearTransactions.push({ date: dStr, type: 'Køb', qty: Math.abs(tx.qty), amount: valRaw + costRaw }); }
-                                else { flows -= (valRaw - costRaw); yearTransactions.push({ date: dStr, type: 'Salg', qty: Math.abs(tx.qty), amount: valRaw - costRaw }); }
+                            const valRaw = Math.abs(tx.qty * tx.price * tx.fxRate);
+                            const accCur = config.currencies[tx.account] || 'DKK';
+                            const costRaw = tx.commission * getFx(accCur, dStr);
+
+                            if (tx.type === 'BUY') {
+                                flows += (valRaw + costRaw);
+                                yearTransactions.push({ date: dStr, type: 'Køb', qty: Math.abs(tx.qty), amount: valRaw + costRaw });
+                            } else if (tx.type === 'SELL') {
+                                flows -= (valRaw - costRaw);
+                                yearTransactions.push({ date: dStr, type: 'Salg', qty: Math.abs(tx.qty), amount: valRaw - costRaw });
                             }
                         });
-                        const primoVal = startQty * getPrice(ticker, primoDate) * getFx(cur, primoDate);
-                        const ultimoVal = endQty * getPrice(ticker, ultimoDate) * getFx(cur, ultimoDate);
+
+                        const endQty = runningQtyMap[key];
+                        const priceUltimo = getPrice(ticker, ultimoDate);
+                        const fxUltimo = getFx(cur, ultimoDate);
+                        const ultimoVal = endQty * priceUltimo * fxUltimo;
+
                         const gain = ultimoVal - primoVal - flows;
+
                         if (primoVal !== 0 || ultimoVal !== 0 || flows !== 0) {
                             if (isAccountASK) reports[y].askGain += gain;
                             else {
@@ -897,92 +1038,61 @@
                             }
                         }
                     });
+
                     reports[y].askTax = Math.max(0, reports[y].askGain * 0.17);
                     const r = reports[y];
                     const shareIncome = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
-                    const limit = (TAX_LIMITS[y]) * (settings.married ? 2 : 1);
-                    let normalTax = 0;
-                    if (shareIncome > 0) normalTax = (shareIncome <= limit) ? shareIncome * 0.27 : (limit * 0.27) + ((shareIncome - limit) * 0.42);
-                    if (r.rubrik345 > 0) normalTax += r.rubrik345 * 0.42;
-                    reports[y].totalNormalTax = normalTax;
+                    const limit = getTaxLimit(y) * (settings.married ? 2 : 1);
+                    reports[y].totalNormalTax = calculateDanishTax(shareIncome, limit);
+                    if (r.rubrik345 > 0) reports[y].totalNormalTax += r.rubrik345 * 0.42;
                 });
 
-
-                // --- 3. LOSS CARRY FORWARD LOGIC ---
-                // Initialize two separate buckets (PROOF OF SEPARATION)
+                // =================================================================================
+                // 4. PASS 3: LOSS CARRY FORWARD
+                // =================================================================================
                 let runningLossNormal = 0;
                 let runningLossAsk = 0;
 
-                // We must process years in order (2019 -> 2020 -> 2021...)
-                const sortedYears = [...years].sort();
-
-                sortedYears.forEach(y => {
+                allYearsSorted.forEach(y => {
                     const r = reports[y];
-
-                    // --- BUCKET 1: Normal Share Income (Frie Midler) ---
-                    // strictly sum of Rubriks 66, 38, 61, 63
                     const shareIncomeRaw = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
 
                     if (shareIncomeRaw < 0) {
-                        // It's a loss year. Add to the bucket.
                         runningLossNormal += Math.abs(shareIncomeRaw);
                         r.carriedLossNormal = runningLossNormal;
                     } else {
-                        // It's a gain year. Check if we have losses in the bucket.
                         if (runningLossNormal > 0) {
-                            if (runningLossNormal >= shareIncomeRaw) {
-                                // Loss is bigger than gain: Wipe out tax, reduce bucket.
-                                r.utilizedLossNormal = shareIncomeRaw;
-                                runningLossNormal -= shareIncomeRaw;
-                            } else {
-                                // Gain is bigger than loss: Use all loss, empty bucket.
-                                r.utilizedLossNormal = runningLossNormal;
-                                runningLossNormal = 0;
-                            }
+                            const used = Math.min(runningLossNormal, shareIncomeRaw);
+                            r.utilizedLossNormal = used;
+                            runningLossNormal -= used;
                         }
                         r.carriedLossNormal = runningLossNormal;
                     }
 
-                    // --- BUCKET 2: ASK Income ---
-                    // strictly askGain
                     if (r.askGain < 0) {
                         runningLossAsk += Math.abs(r.askGain);
                         r.carriedLossAsk = runningLossAsk;
                     } else {
                         if (runningLossAsk > 0) {
-                            if (runningLossAsk >= r.askGain) {
-                                r.utilizedLossAsk = r.askGain;
-                                runningLossAsk -= r.askGain;
-                            } else {
-                                r.utilizedLossAsk = runningLossAsk;
-                                runningLossAsk = 0;
-                            }
+                            const used = Math.min(runningLossAsk, r.askGain);
+                            r.utilizedLossAsk = used;
+                            runningLossAsk -= used;
                         }
                         r.carriedLossAsk = runningLossAsk;
                     }
 
-                    // --- FINAL CALCULATION ---
-
-                    // 1. Normal Tax: Calculated on (Income - Utilized Loss)
                     const taxableShareIncome = Math.max(0, shareIncomeRaw - r.utilizedLossNormal);
-                    const limit = (TAX_LIMITS[y] || 61000) * (settings.married ? 2 : 1);
+                    const limit = getTaxLimit(y) * (settings.married ? 2 : 1);
+                    r.totalNormalTax = calculateDanishTax(taxableShareIncome, limit);
+                    if (r.rubrik345 > 0) r.totalNormalTax += r.rubrik345 * 0.42;
 
-                    let normalTax = 0;
-                    if (taxableShareIncome > 0) {
-                        normalTax = (taxableShareIncome <= limit)
-                            ? taxableShareIncome * 0.27
-                            : (limit * 0.27) + ((taxableShareIncome - limit) * 0.42);
-                    }
-                    if (r.rubrik345 > 0) normalTax += r.rubrik345 * 0.42;
-                    r.totalNormalTax = normalTax;
-
-                    // 2. ASK Tax: Calculated on (Gain - Utilized Loss)
                     const taxableAsk = Math.max(0, r.askGain - r.utilizedLossAsk);
                     r.askTax = taxableAsk * 0.17;
                 });
 
-
-                // 4. Current Values
+                // =================================================================================
+                // 5. CURRENT VALUES & LIQUIDATION
+                // =================================================================================
                 let currentVal = 0;
                 let costBasisTotal = 0;
                 let unrealizedRubrik66Gain = 0;
@@ -996,45 +1106,32 @@
                     const val = p.qty * price * fx;
                     currentVal += val;
                     costBasisTotal += (p.qty * p.avg);
+
                     const pKey = `${p.ticker}_${p.acc}`;
-                    const pType = keyInfo[pKey]?.type || 'Stock';
-                    const isASK = p.acc === config.askAccount;
-                    if (!isASK && pType === 'Stock') unrealizedRubrik66Gain += (val - (p.qty * p.avg));
+                    if (!keyInfo[pKey]?.isInventory) {
+                        unrealizedRubrik66Gain += (val - (p.qty * p.avg));
+                    }
                 });
 
-                const ytd = reports[currentYear] || { rubrik66: 0, rubrik38: 0, rubrik61: 0, rubrik63: 0, rubrik345: 0, askGain: 0, paidTax: 0, paidAskTax: 0, withheldTax: 0, totalNormalTax: 0 };
-                const totalAskGain = ytd.askGain || 0;
-                const totalAskBill = Math.max(0, totalAskGain * 0.17);
-                const liquidationAskTax = Math.max(0, totalAskBill - (ytd.paidAskTax || 0));
-                const totalShareIncome = (ytd.rubrik66 || 0) + (ytd.rubrik38 || 0) + (ytd.rubrik61 || 0) + (ytd.rubrik63 || 0) + unrealizedRubrik66Gain;
-                const taxLimit = (TAX_LIMITS[currentYear] || 61000) * (settings.married ? 2 : 1);
+                const ytd = reports[currentYear] || reportTemplate();
+                const liqAskGain = Math.max(0, (ytd.askGain || 0));
+                const liquidationAskTax = Math.max(0, (Math.max(0, liqAskGain - (ytd.utilizedLossAsk || 0)) * 0.17) - (ytd.paidAskTax || 0));
 
-                if (totalShareIncome > 0) taxOnTotal = (totalShareIncome <= taxLimit) ? totalShareIncome * 0.27 : (taxLimit * 0.27) + ((totalShareIncome - taxLimit) * 0.42);
-                taxOnTotal += ((ytd.rubrik345 || 0) * 0.42);
+                const totalRealizedYTD = (ytd.rubrik66 || 0) + (ytd.rubrik38 || 0) + (ytd.rubrik61 || 0) + (ytd.rubrik63 || 0);
+                const hypoTotalIncome = totalRealizedYTD + unrealizedRubrik66Gain;
+                const availableLoss = reports[parseInt(currentYear) - 1]?.carriedLossNormal || 0;
+                const hypoTaxable = Math.max(0, hypoTotalIncome - availableLoss);
+                const limit = getTaxLimit(currentYear) * (settings.married ? 2 : 1);
 
+                let hypoTaxBill = calculateDanishTax(hypoTaxable, limit);
+                hypoTaxBill += ((ytd.rubrik345 || 0) * 0.42);
 
-                // Check if we have unused losses from previous years available right now
-                const availableLossNormal = reports[parseInt(currentYear) - 1]?.carriedLossNormal || 0;
-                // Reduce the hypothetical income by that loss
-                const taxableHypothetical = Math.max(0, totalShareIncome - availableLossNormal);
-
-                // Recalculate tax on this reduced amount
-                let taxOnTotal = 0;
-                if (taxableHypothetical > 0) {
-                    taxOnTotal = (taxableHypothetical <= taxLimit)
-                        ? taxableHypothetical * 0.27
-                        : (taxLimit * 0.27) + ((taxableHypothetical - taxLimit) * 0.42);
-                }
-                taxOnTotal += ((ytd.rubrik345 || 0) * 0.42);
-
-                const liquidationNormalTax = Math.max(0, taxOnTotal - (ytd.totalNormalTax || 0));
-
+                const liquidationNormalTax = Math.max(0, hypoTaxBill - (ytd.totalNormalTax || 0));
                 const currentTax = liquidationAskTax + liquidationNormalTax;
 
-                // 5. Graph & Yearly Stats (INVESTED CAPITAL MODEL)
-                // We track "Invested Assets" separately from "Bank Cash".
-                // Graph Value = Value of Stocks/ETFs (Always >= 0)
-                // Graph Flow  = Money entering market (Buy) or leaving (Sell/Div)
+                // =================================================================================
+                // 6. GRAPHS (MODIFIED DIETZ)
+                // =================================================================================
                 let yearlyStats = [];
                 if (txs.length > 0) {
                     const timeTxs = [...txs].sort((a, b) => a.date - b.date);
@@ -1046,13 +1143,11 @@
                     let prevDayValue = 0;
 
                     totalValueGraph.push({ date: getLocalISO(d), value: 0 });
-                    const zeroDate = new Date(d);
-                    zeroDate.setDate(d.getDate() - 1);
-                    growthGraphData.push({ date: getLocalISO(zeroDate), value: 0 });
+                    growthGraphData.push({ date: getLocalISO(d), value: 0 });
 
                     while (d <= now) {
                         const dStr = getLocalISO(d);
-                        let dayInvestedFlow = 0; // Net flow INTO the asset bucket
+                        let dayInvestedFlow = 0; // Net Cash added/removed
 
                         while (txCursor < timeTxs.length && timeTxs[txCursor].date <= d) {
                             const tx = timeTxs[txCursor];
@@ -1063,50 +1158,42 @@
                             if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
                                 if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cur: tx.currency, ticker: tx.ticker };
                                 const p = historyPortfolio[key];
-
                                 const tradeValDKK = (Math.abs(tx.qty) * tx.price * tx.fxRate);
                                 const commDKK = (tx.commission * accFx);
 
                                 if (tx.type === 'BUY') {
                                     p.qty += tx.qty;
-                                    // Flow In = Cost of Trade (Price + Comm)
                                     dayInvestedFlow += (tradeValDKK + commDKK);
-                                }
-                                else if (tx.type === 'SELL') {
+                                } else if (tx.type === 'SELL') {
                                     p.qty -= Math.abs(tx.qty);
-                                    // Flow Out = Proceeds (Price - Comm) - Negative Flow
                                     dayInvestedFlow -= (tradeValDKK - commDKK);
                                 }
-                            }
-                            else if (tx.type === 'DIVIDEND') {
-                                // Dividend is money leaving the "Stock" bucket -> Negative Flow
-                                const divValDKK = (tx.qty * (tx.price || 1) * tx.fxRate);
+                            } else if (tx.type === 'DIVIDEND') {
+                                const divValDKK = (tx.qty * (tx.price ?? 1) * tx.fxRate);
                                 const taxDKK = (tx.tax * accFx);
                                 dayInvestedFlow -= (divValDKK - taxDKK);
                             }
-                            // Note: We IGNORE 'Cash' type rows for the GRAPH flow to prevent negative portfolio values.
-                            // We only care about money entering/leaving the "Asset" bucket.
-
                             txCursor++;
                         }
 
                         let dayAssetValue = 0;
                         for (const key in historyPortfolio) {
-                            const pos = historyPortfolio[key];
-                            if (pos.qty > 0.0001) {
-                                const price = getPrice(pos.ticker, dStr);
-                                const fx = getFx(pos.cur, dStr);
-                                if (price) dayAssetValue += (pos.qty * price * fx);
+                            const p = historyPortfolio[key];
+                            if (Math.abs(p.qty) > 0.0001) {
+                                const price = getPrice(p.ticker, dStr);
+                                const fx = getFx(p.cur, dStr);
+                                if (price) dayAssetValue += (p.qty * price * fx);
                             }
                         }
 
-                        // TWR Calc on ASSETS ONLY
-                        // Adjusted Basis = StartValue + (NetFlows * 0.5)
-                        const adjustedBasis = prevDayValue + (dayInvestedFlow * 0.5);
-                        const dailyGain = dayAssetValue - prevDayValue - dayInvestedFlow;
+                        // MODIFIED DIETZ CALCULATION (0.5 Flow Weighting)
+                        // This handles short-term RSU holds without spiking percentage returns
+                        const adjustedStart = prevDayValue + (dayInvestedFlow * 0.5);
+                        const dailyProfit = dayAssetValue - prevDayValue - dayInvestedFlow;
 
-                        if (adjustedBasis > 1) { // Prevent div/0
-                            twrMultiplier = twrMultiplier * (1 + (dailyGain / adjustedBasis));
+                        if (adjustedStart > 1) {
+                            const dailyReturn = dailyProfit / adjustedStart;
+                            twrMultiplier = twrMultiplier * (1 + dailyReturn);
                         }
 
                         prevDayValue = dayAssetValue;
@@ -1118,14 +1205,13 @@
                         d.setDate(d.getDate() + 1);
                     }
 
-                    // --- YEARLY STATS CALCULATION ---
+                    // Yearly Stats Logic (Same as before)
                     if (totalValueGraph.length > 0) {
                         const firstYear = parseInt(totalValueGraph[0].date.slice(0, 4), 10);
                         const lastYear = parseInt(totalValueGraph[totalValueGraph.length - 1].date.slice(0, 4), 10);
                         const nearest = (target, dataset) => dataset.find(p => p.date >= target);
 
                         for (let y = lastYear; y >= firstYear; y--) {
-                            // A. TWR Return (Asset Based)
                             const startNode = nearest(`${y}-01-01`, growthGraphData);
                             let endNode = nearest(`${y}-12-31`, growthGraphData);
                             if (y === new Date().getFullYear()) endNode = growthGraphData[growthGraphData.length - 1];
@@ -1133,7 +1219,6 @@
                                 const yearData = growthGraphData.filter(p => p.date.startsWith(y.toString()));
                                 if (yearData.length) endNode = yearData[yearData.length - 1];
                             }
-
                             let yearReturn = 0;
                             if (startNode && endNode) {
                                 const startMult = 1 + (startNode.value / 100);
@@ -1141,58 +1226,32 @@
                                 yearReturn = ((endMult / startMult) - 1) * 100;
                             }
 
-                            // B. Gain (Asset Based)
-                            // Gain = (EndAsset - StartAsset) - (NetInvested)
-                            let vStart = 0;
-                            let vEnd = 0;
-
+                            let vStart = 0; let vEnd = 0;
                             const prevYearEnd = nearest(`${y - 1}-12-31`, totalValueGraph);
                             if (prevYearEnd) vStart = prevYearEnd.value;
                             else {
                                 const prevYearData = totalValueGraph.filter(p => p.date.startsWith((y - 1).toString()));
                                 if (prevYearData.length) vStart = prevYearData[prevYearData.length - 1].value;
                             }
-
                             const currYearEnd = nearest(`${y}-12-31`, totalValueGraph);
                             if (currYearEnd) vEnd = currYearEnd.value;
                             else if (y === new Date().getFullYear()) vEnd = totalValueGraph[totalValueGraph.length - 1].value;
-                            else {
-                                const curYearData = totalValueGraph.filter(p => p.date.startsWith(y.toString()));
-                                if (curYearData.length) vEnd = curYearData[curYearData.length - 1].value;
-                            }
 
-                            // Calc Asset Flows for this year
                             let netInvested = 0;
+                            let bankFlow = 0; let flowIn = 0; let flowOut = 0;
+
                             txs.forEach(tx => {
                                 if (tx.date.getFullYear() === y) {
                                     const accCur = config.currencies[tx.account] || 'DKK';
                                     const accFx = getFx(accCur, getLocalISO(tx.date));
+                                    if (tx.type === 'BUY') netInvested += (Math.abs(tx.qty) * tx.price * tx.fxRate) + (tx.commission * accFx);
+                                    else if (tx.type === 'SELL') netInvested -= ((Math.abs(tx.qty) * tx.price * tx.fxRate) - (tx.commission * accFx));
+                                    else if (tx.type === 'DIVIDEND') netInvested -= ((tx.qty * (tx.price ?? 1) * tx.fxRate) - (tx.tax * accFx));
 
-                                    if (tx.type === 'BUY') {
-                                        netInvested += (Math.abs(tx.qty) * tx.price * tx.fxRate) + (tx.commission * accFx);
-                                    } else if (tx.type === 'SELL') {
-                                        netInvested -= ((Math.abs(tx.qty) * tx.price * tx.fxRate) - (tx.commission * accFx));
-                                    } else if (tx.type === 'DIVIDEND') {
-                                        netInvested -= ((tx.qty * (tx.price || 1) * tx.fxRate) - (tx.tax * accFx));
-                                    }
-                                }
-                            });
-
-                            const gainAbs = vEnd - vStart - netInvested;
-
-                            // C. Net Capital Flow (Bank Transfers)
-                            // This tracks the CSV "Cash" rows purely for display in the table
-                            let bankFlow = 0;
-                            let flowIn = 0;
-                            let flowOut = 0;
-                            txs.forEach(tx => {
-                                if (tx.date.getFullYear() === y) {
-                                    // Only count explicit Cash Transfer/Deposit rows
                                     if (tx.assetType === 'Cash' && tx.type !== 'DIVIDEND' && tx.type !== 'INTEREST') {
                                         const val = (tx.qty * tx.fxRate);
                                         bankFlow += val;
-                                        if (val > 0) flowIn += val;
-                                        else flowOut += val;
+                                        if (val > 0) flowIn += val; else flowOut += val;
                                     }
                                 }
                             });
@@ -1200,18 +1259,17 @@
                             yearlyStats.push({
                                 year: y,
                                 return: yearReturn,
-                                flow: bankFlow, // Show the User's Bank Transfers
-                                gainAbs: gainAbs, // Show the Asset Performance
+                                flow: bankFlow,
+                                gainAbs: vEnd - vStart - netInvested,
                                 breakdown: { in: flowIn, out: flowOut }
                             });
                         }
                     }
                 }
 
-                return { portfolio, reports, totalValueGraph, growthGraphData, currentVal, currentTax, costBasisTotal, liquidationAskTax, liquidationNormalTax, unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats };
+                return { portfolio, reports, totalValueGraph, growthGraphData, currentVal, currentTax, costBasisTotal, liquidationAskTax, liquidationNormalTax, unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats, warnings: executionWarnings };
             }, [txs, marketData, settings]);
 
-            // 2. HOLDINGS
             // 2. HOLDINGS
             const renderHoldings = () => {
                 let list = Object.values(calc.portfolio).filter(p => Math.abs(p.qty) > 0.01);
@@ -1502,21 +1560,7 @@
                 const limitBase = TAX_LIMITS[taxYear] || 61000;
                 const limitActual = limitBase * (settings.married ? 2 : 1);
 
-                // Normal Tax Calculation (Based on Taxable Income, NOT Raw Income)
-                let taxBill = 0;
-                let tax27 = 0;
-                let tax42 = 0;
-
-                if (taxableIncome > 0) {
-                    if (taxableIncome <= limitActual) {
-                        tax27 = taxableIncome * 0.27;
-                        taxBill = tax27;
-                    } else {
-                        tax27 = limitActual * 0.27;
-                        tax42 = (taxableIncome - limitActual) * 0.42;
-                        taxBill = tax27 + tax42;
-                    }
-                }
+                let taxBill = calculateDanishTax(taxableIncome, limitActual);
 
                 // Capital Income Tax (Rubrik 345)
                 const kapIncomeTax = (r.rubrik345 || 0) * 0.42;
@@ -1545,7 +1589,7 @@
                                         </h3>
                                     </div>
                                     <div className="text-right">
-                                        <div className={`text-2xl font-bold leading-none ${taxableIncome >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                                        <div className={`text-xl font-bold leading-none ${taxableIncome >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
                                             {formatCurrencyNoDecimals(taxableIncome)}
                                         </div>
                                     </div>
@@ -1709,7 +1753,7 @@
                                             <div className="flex justify-between items-center text-sm border-b border-gray-50 pb-2">
                                                 <div className="flex items-center gap-2">
                                                     <span className="bg-teal-50 text-teal-700 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded text-xs">Lager</span>
-                                                    <span className="text-gray-600">Årets Afkast</span>
+                                                    <span className="text-gray-600">Gevinst/tab</span>
                                                 </div>
                                                 <span className="font-mono font-medium text-gray-900">{formatCurrencyNoDecimals(r.askGain)}</span>
                                             </div>
@@ -1766,9 +1810,6 @@
                                                 </span>
                                                 <span className="font-bold text-gray-500 font-mono">0 kr.</span>
                                             </div>
-                                            <p className="text-[10px] text-gray-400 mt-1 leading-tight">
-                                                Salg påvirker ikke skatten, da ASK lagerbeskattes årligt uanset om du sælger eller ej.
-                                            </p>
                                         </div>
                                     )}
                                 </div>
@@ -2016,7 +2057,7 @@
                 // 3. PREPARE TICKS: Convert your yearTicks to numbers
                 const numericYearTicks = yearTicks.map(dateStr => toUnix(dateStr));
 
-                // 4. UPDATED FORMATTER: Handles the timestamp coming from the chart
+                // 4. FORMATTER: Handles the timestamp coming from the chart
                 const formatAxisDateNumeric = (timestamp) => {
                     const date = new Date(timestamp);
                     // Convert back to YYYY-MM-DD to reuse your existing logic, or format directly here
@@ -2029,8 +2070,59 @@
 
                 const currentYearReport = calc.reports[new Date().getFullYear().toString()] || {};
 
+                // --- PREPARE BREAKDOWN DATA ---
+                const bd = Object.values(calc.reports).reduce((acc, r) => ({
+                    stocks: acc.stocks + (r.rubrik66 || 0),
+                    etfs: acc.etfs + (r.rubrik38 || 0),
+                    divs: acc.divs + (r.rubrik61 || 0) + (r.rubrik63 || 0),
+                    capital: acc.capital + (r.rubrik345 || 0),
+                    ask: acc.ask + (r.askGain || 0),
+                }), { stocks: 0, etfs: 0, divs: 0, capital: 0, ask: 0 });
+
                 return (
                     <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
+
+                        {/* --- BREAKDOWN MODAL --- */}
+                        {showGainModal && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowGainModal(false)}>
+                                <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                                    <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                            <i className="ph ph-chart-pie-slice text-blue-600"></i> Gevinstfordeling
+                                        </h3>
+                                        <button onClick={() => setShowGainModal(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x text-lg"></i></button>
+                                    </div>
+                                    <div className="p-4 space-y-3">
+                                        {[
+                                            { label: 'Realiseret Aktiegevinst', val: bd.stocks, icon: 'ph-trend-up', color: 'text-blue-600', bg: 'bg-blue-50' },
+                                            { label: 'Lagerbeskattet (ETF)', val: bd.etfs, icon: 'ph-buildings', color: 'text-purple-600', bg: 'bg-purple-50' },
+                                            { label: 'Udbytter', val: bd.divs, icon: 'ph-coins', color: 'text-green-600', bg: 'bg-green-50' },
+                                            { label: 'Kapitalindkomst', val: bd.capital, icon: 'ph-bank', color: 'text-orange-600', bg: 'bg-orange-50' },
+                                            { label: 'Aktiesparekonto', val: bd.ask, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50' },
+                                            { label: 'Urealiseret (Aktier)', val: calc.unrealizedStockGain, icon: 'ph-hourglass', color: 'text-gray-600', bg: 'bg-gray-100', italic: true }
+                                        ].map((item, i) => (
+                                            <div key={i} className="flex justify-between items-center text-sm group">
+                                                <div className="flex items-center gap-3">
+                                                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${item.bg} ${item.color}`}>
+                                                        <i className={`ph ${item.icon}`}></i>
+                                                    </div>
+                                                    <span className={`text-gray-700 ${item.italic ? 'italic text-gray-500' : ''}`}>{item.label}</span>
+                                                </div>
+                                                <span className={`font-mono font-medium ${item.val >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                                                    {formatCurrencyNoDecimals(item.val)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                        <div className="border-t border-gray-200 mt-4 pt-3 flex justify-between items-center">
+                                            <span className="font-bold text-gray-900">Total</span>
+                                            <span className={`font-bold text-lg ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                {formatCurrencyNoDecimals(allTimeGain)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* 1. TOP CARDS */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-6">
@@ -2053,13 +2145,19 @@
                                 </div>
                             </div>
                             {/* All Time Gain */}
-                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                           <div 
+                                onClick={() => setShowGainModal(true)}
+                                className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-gray-50 hover:border-blue-300 transition-all group relative"
+                            >
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
                                     <i className="ph ph-trend-up"></i>Samlet gevinst
                                 </div>
-                                <div className="mt-2">
+                                <div className="mt-2 flex justify-between items-end">
                                     <div className={`text-3xl font-bold tracking-tight ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'} break-words`} style={{ wordBreak: 'break-word' }}>
                                         {formatCurrencyNoDecimals(allTimeGain)}
+                                    </div>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 mb-1">
+                                        <i className="ph ph-info text-xl"></i>
                                     </div>
                                 </div>
                             </div>
@@ -2112,9 +2210,9 @@
 
                                         return (
                                             <>
-                                                <div className={`text-3xl font-bold tracking-tight ${todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600'} break-words`} style={{ wordBreak: 'break-word' }}>
+                                                <div className={`text-3xl font-bold tracking-tight ${activeCount === 0 ? 'text-gray-400' : (todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600')} break-words`} style={{ wordBreak: 'break-word' }}>
                                                     {activeCount > 0 ? formatCurrencyNoDecimals(todayGain) : "0 kr."}
-                                                    <span className={`text-lg font-bold ml-2 align-middle ${todayPct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                    <span className={`text-lg font-bold ml-2 align-middle ${activeCount === 0 ? 'text-gray-400' : (todayPct >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
                                                         {activeCount > 0 ? `${todayPct.toFixed(2)}%` : ""}
                                                     </span>
                                                 </div>
@@ -2168,7 +2266,7 @@
                                     </div>
                                     <div className="h-64 w-full">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            {/* UPDATED: Use numericValueData */}
+                                            {/* Use numericValueData */}
                                             <AreaChart data={numericValueData}>
                                                 <defs>
                                                     <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
@@ -2178,7 +2276,7 @@
                                                 </defs>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
 
-                                                {/* UPDATED XAXIS */}
+                                                {/* XAXIS */}
                                                 <XAxis
                                                     dataKey="date"
                                                     type="number"
@@ -2193,10 +2291,10 @@
 
                                                 <YAxis width={45} axisLine={false} tickLine={false} domain={['dataMin', 'dataMax']} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
 
-                                                {/* UPDATED TOOLTIP */}
+                                                {/* TOOLTIP */}
                                                 <Tooltip formatter={(v) => formatCurrency(v)} labelFormatter={formatAxisDateNumeric} />
 
-                                                {/* UPDATED REFERENCE LINES */}
+                                                {/* REFERENCE LINES */}
                                                 {showYearLines && numericYearTicks.map(timestamp => (
                                                     <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
                                                 ))}
@@ -2215,7 +2313,7 @@
                                     </div>
                                     <div className="h-64 w-full">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            {/* UPDATED: Use numericGrowthData */}
+                                            {/* Use numericGrowthData */}
                                             <AreaChart data={numericGrowthData}>
                                                 <defs>
                                                     <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
@@ -2225,7 +2323,7 @@
                                                 </defs>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
 
-                                                {/* UPDATED XAXIS */}
+                                                {/* XAXIS */}
                                                 <XAxis
                                                     dataKey="date"
                                                     type="number"
@@ -2240,12 +2338,12 @@
 
                                                 <YAxis width={45} axisLine={false} tickLine={false} tickFormatter={(v) => `${v.toFixed(0)}%`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
 
-                                                {/* UPDATED TOOLTIP */}
+                                                {/* TOOLTIP */}
                                                 <Tooltip formatter={(v) => `${v.toFixed(2)}%`} labelFormatter={formatAxisDateNumeric} />
 
                                                 <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
 
-                                                {/* UPDATED REFERENCE LINES */}
+                                                {/* REFERENCE LINES */}
                                                 {showYearLines && numericYearTicks.map(timestamp => (
                                                     <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
                                                 ))}
@@ -2319,47 +2417,6 @@
                     const idx = focusables.indexOf(el);
                     const prev = focusables[idx - 1];
                     if (prev) prev.focus();
-                };
-
-                // --- KEY HELPER: Handles the "Edit Buffer" for Danish Numbers ---
-                // fieldKey: The actual data column (e.g., 'Price')
-                // rawKey: Temporary state key for typing (e.g., '__price_raw')
-                const renderNumInput = (row, fieldKey, rawKey, extraClass = "", title = "") => {
-                    return (
-                        <input
-                            inputMode="decimal"
-                            className={`w-16 input-base p-1 rounded text-right font-mono ${extraClass}`}
-                            title={title}
-                            // 1. DISPLAY: Show Raw text if typing, otherwise formatted Danish Number
-                            value={row[rawKey] !== undefined ? row[rawKey] : formatDanishNumber(row[fieldKey], 10)}
-
-                            // 2. CHANGE: Just save the raw text to buffer (allow commas/dots)
-                            onChange={e => setRows(prev => {
-                                const n = [...prev];
-                                n[row._idx] = { ...n[row._idx], [rawKey]: e.target.value };
-                                return n;
-                            })}
-
-                            // 3. BLUR: Parse the buffer into a real Number and cleanup
-                            onBlur={() => setRows(prev => {
-                                const n = [...prev];
-                                if (n[row._idx][rawKey] !== undefined) {
-                                    n[row._idx][fieldKey] = parseDanishNumber(n[row._idx][rawKey]);
-                                    delete n[row._idx][rawKey];
-                                }
-                                return n;
-                            })}
-
-                            // 4. ENTER: Commit and move to next field
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    e.target.blur(); // Triggers the onBlur logic above
-                                    if (e.shiftKey) focusPrev(e.currentTarget);
-                                    else focusNext(e.currentTarget);
-                                }
-                            }}
-                        />
-                    );
                 };
 
                 const editorRows = viewRows.map(row => {
@@ -2530,7 +2587,13 @@
 
                                             {/* 1. Qty */}
                                             <td className="p-1 relative group/qty">
-                                                {renderNumInput(row, 'Qty', '__qty_raw', 'w-24')}
+                                                <NumberInput
+                                                    row={row}
+                                                    setRows={setRows}
+                                                    fieldKey="Qty"
+                                                    rawKey="__qty_raw"
+                                                    extraClass="w-24"
+                                                />
 
                                                 {/* The Hint: Only show if Dividend and we have a ticker */}
                                                 {row._meta.isDividend && row['Ticker'] && (
@@ -2543,8 +2606,15 @@
                                             </td>
 
                                             {/* 2. Price */}
-                                            <td className="p-1">{renderNumInput(row, 'Price', '__price_raw', row._meta.isCash ? 'text-gray-300' : '')}</td>
-
+                                            <td className="p-1">
+                                                <NumberInput
+                                                    row={row}
+                                                    setRows={setRows}
+                                                    fieldKey="Price"
+                                                    rawKey="__price_raw"
+                                                    extraClass={row._meta.isCash ? 'text-gray-300' : ''}
+                                                />
+                                            </td>
                                             {/* Currency */}
                                             <td className="p-1">
                                                 <select className="w-16 input-base p-1 rounded text-xs" value={row['Currency']} onChange={e => updateRow(row._idx, 'Currency', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
@@ -2554,78 +2624,89 @@
 
                                             {/* FxRate with Warning Tooltip */}
                                             <td className="p-1">
-                                                {renderNumInput(
-                                                    row,
-                                                    'FxRate',
-                                                    '__fx_raw',
-                                                    // 1. Visual: Keep the Orange Warning Style
-                                                    row._meta.warnFx ? 'bg-orange-50 text-orange-700 font-bold border border-orange-300' : '',
-                                                    // 2. Tooltip: Pass the warning text here as the 5th argument
-                                                    row._meta.warnFx ? "Critical: Foreign currency with Rate 1.00. Tax report will be incorrect." : "Exchange Rate used for Tax Calc"
-                                                )}
+                                                <NumberInput
+                                                    row={row}
+                                                    setRows={setRows}
+                                                    fieldKey="FxRate"
+                                                    rawKey="__fx_raw"
+                                                    extraClass={row._meta.warnFx ? 'bg-orange-50 text-orange-700 font-bold border border-orange-300' : ''}
+                                                    title={row._meta.warnFx ? "Critical: Foreign currency with Rate 1.00" : "Exchange Rate"}
+                                                />
                                             </td>
 
                                             {/* 4. Commission */}
-                                            <td className="p-1">{renderNumInput(row, 'Commission', '__comm_raw', !row._meta.isTrade ? 'text-gray-300' : 'text-gray-700', 'Trading Fee (Account Currency)')}</td>
-
+                                            <td className="p-1">
+                                                <NumberInput
+                                                    row={row}
+                                                    setRows={setRows}
+                                                    fieldKey="Commission"
+                                                    rawKey="__comm_raw"
+                                                    extraClass={!row._meta.isTrade ? 'text-gray-300' : 'text-gray-700'}
+                                                    title="Trading Fee"
+                                                />
+                                            </td>
                                             {/* 5. Withheld Tax */}
                                             <td className="p-1">
                                                 {(() => {
-                                                    // General-purpose warning utility for table cells
-                                                    function getCellWarnings(row, criteria) {
-                                                        let warnings = [];
-                                                        let extraClass = 'text-gray-700';
-                                                        for (const crit of criteria) {
-                                                            if (crit.condition(row)) {
-                                                                if (crit.className) extraClass = crit.className;
-                                                                if (crit.message) warnings.push(typeof crit.message === 'function' ? crit.message(row) : crit.message);
+                                                    // 1. Gather Data
+                                                    const isDividend = row['Type'] === 'Dividend';
+                                                    const taxVal = parseDanishNumber(row['Withheld Tax']);
+
+                                                    // 2. Default Styling (Non-Dividend = Grey)
+                                                    let css = 'text-gray-300';
+                                                    let tooltip = 'Dividend Tax';
+
+                                                    // 3. Logic for Dividends
+                                                    if (isDividend) {
+                                                        css = 'text-gray-700'; // Normal text
+
+                                                        // A. Check for Zero Tax
+                                                        if (taxVal === 0) {
+                                                            css = 'text-orange-700 bg-orange-50 border border-orange-300 font-bold';
+                                                            tooltip = 'Warning: No tax withheld on dividend';
+                                                        }
+                                                        // B. Check Tax Ratio (Integrity Check)
+                                                        else {
+                                                            const qty = parseDanishNumber(row['Qty']);
+                                                            const price = parseDanishNumber(row['Price']);
+                                                            const fx = parseDanishNumber(row['FxRate']) || 1;
+
+                                                            // Determine Currency Conversion
+                                                            const acc = row['Account'] || '';
+                                                            const accCur = (config.currencies[acc] || 'DKK').toUpperCase();
+                                                            const stockCur = (row['Currency'] || 'DKK').toUpperCase();
+
+                                                            // If Currencies differ, apply FxRate to get Gross in Account Currency
+                                                            const conversion = accCur !== stockCur ? fx : 1;
+                                                            const grossAmount = qty * price * conversion;
+
+                                                            if (grossAmount > 0) {
+                                                                const pct = (taxVal / grossAmount) * 100;
+
+                                                                // Validation Rules:
+                                                                // DKK: Expect ~27%
+                                                                // Foreign: Expect 15% - 28% (Standard treaty rates)
+                                                                const isSuspicious = stockCur === 'DKK'
+                                                                    ? (pct < 26 || pct > 28)
+                                                                    : (pct < 14 || pct > 30);
+
+                                                                if (isSuspicious) {
+                                                                    css = 'text-orange-700 bg-orange-50 border border-orange-300 font-bold';
+                                                                    tooltip = `Warning: Unusual Tax Rate (${pct.toFixed(1)}%). Check amounts.`;
+                                                                }
                                                             }
                                                         }
-                                                        return { extraClass, warning: warnings.join(' ') };
                                                     }
 
-                                                    // Criteria for Withheld Tax cell (dividend rows)
-                                                    const withheldTaxCriteria = [
-                                                        {
-                                                            condition: row => row['Type'] === 'Dividend' && parseDanishNumber(row['Withheld Tax']) === 0,
-                                                            className: 'text-orange-700 bg-orange-50 border border-orange-300 font-bold',
-                                                            message: 'Warning: No tax withheld on dividend. This is likely wrong.'
-                                                        },
-                                                        {
-                                                            condition: row => {
-                                                                if (row['Type'] !== 'Dividend') return false;
-                                                                const qty = parseDanishNumber(row['Qty']);
-                                                                const price = parseDanishNumber(row['Price']);
-                                                                const fxRate = parseDanishNumber(row['FxRate']) || 1;
-                                                                // Determine if conversion is needed
-                                                                const acc = row['Account'] || 'Unknown';
-                                                                const accCurrency = (config.currencies && config.currencies[acc]) ? config.currencies[acc].toUpperCase() : 'DKK';
-                                                                const stockCurrency = (row['Currency'] || 'DKK').toUpperCase();
-                                                                const conversionRate = accCurrency !== stockCurrency ? fxRate : 1;
-                                                                // Calculate gross in account currency
-                                                                const gross = qty * price * conversionRate;
-                                                                if (gross <= 0) return false;
-                                                                const withheld = parseDanishNumber(row['Withheld Tax']);
-                                                                const pct = (withheld / (gross)) * 100;
-                                                                return stockCurrency == 'DKK' ? pct < 26 || pct > 28 : pct < 14 || pct > 18;
-                                                            },
-                                                            className: 'text-orange-700 bg-orange-50 border border-orange-300 font-bold',
-                                                            message: 'Warning: not between 15% or 27%'
-                                                        },
-                                                        {
-                                                            condition: row => row['Type'] !== 'Dividend',
-                                                            className: 'text-gray-300',
-                                                            message: ''
-                                                        }
-                                                    ];
-
-                                                    const { extraClass, warning } = getCellWarnings(row, withheldTaxCriteria);
-                                                    return renderNumInput(
-                                                        row,
-                                                        'Withheld Tax',
-                                                        '__tax_raw',
-                                                        extraClass,
-                                                        warning || 'Dividend Tax (Account Currency)'
+                                                    return (
+                                                        <NumberInput
+                                                            row={row}
+                                                            setRows={setRows}
+                                                            fieldKey="Withheld Tax"
+                                                            rawKey="__tax_raw"
+                                                            extraClass={css}
+                                                            title={tooltip}
+                                                        />
                                                     );
                                                 })()}
                                             </td>
@@ -2798,7 +2879,7 @@ Proceed?`;
                             {/* LEFT COL: Configuration */}
                             <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar">
 
-                                {/* A. Auto-Detector (Updated to fill start date) */}
+                                {/* A. Auto-Detector  */}
                                 {splitCandidates.length > 0 && (
                                     <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
                                         <div className="flex items-center gap-2 mb-3 text-orange-800 font-bold text-sm uppercase tracking-wide">
@@ -3329,6 +3410,24 @@ Proceed?`;
                                 </div>
                                 <ul className="list-disc list-inside text-sm text-red-700 space-y-1 font-mono">
                                     {schemaErrors.map((e, i) => <li key={i}>{e}</li>)}
+                                </ul>
+                            </div>
+                        )}
+
+                        {/* --- CALCULATION WARNINGS BANNER (MISSING LIMITS/RATES) --- */}
+                        {calc.warnings && calc.warnings.length > 0 && (
+                            <div className="bg-orange-50 border-b border-orange-200 p-4 max-h-40 overflow-y-auto animate-in slide-in-from-top-2">
+                                <div className="flex items-center gap-2 text-orange-900 font-bold mb-2">
+                                    <i className="ph ph-warning-octagon text-xl text-orange-600"></i>
+                                    <span>Kritiske Beregningsfejl ({calc.warnings.length})</span>
+                                </div>
+                                <div className="text-sm text-orange-800 mb-2">
+                                    Følgende mangler forhindrer korrekt skatteberegning:
+                                </div>
+                                <ul className="list-disc list-inside text-xs text-orange-800 space-y-1 font-mono bg-white/50 p-2 rounded border border-orange-100">
+                                    {calc.warnings.map((w, i) => (
+                                        <li key={i}>{w}</li>
+                                    ))}
                                 </ul>
                             </div>
                         )}
