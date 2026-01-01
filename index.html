@@ -651,6 +651,7 @@
             const [graphRange, setGraphRange] = useState('ALL'); // '1M', 'YTD', 'ALL'
 
             const [showGainModal, setShowGainModal] = useState(false);
+            const [showLiquidationModal, setShowLiquidationModal] = useState(false);
 
             useEffect(() => {
                 const saved = localStorage.getItem('gh_config');
@@ -2079,8 +2080,100 @@
                     ask: acc.ask + (r.askGain || 0),
                 }), { stocks: 0, etfs: 0, divs: 0, capital: 0, ask: 0 });
 
+
+                // --- PREPARE LIQUIDATION DATA (LIFETIME) ---
+                const liqStats = Object.values(calc.reports).reduce((acc, r) => ({
+                    paidNormal: acc.paidNormal + (r.paidTax || 0),
+                    paidAsk: acc.paidAsk + (r.paidAskTax || 0),
+                    paidDiv: acc.paidDiv + (r.withheldTax || 0),
+                    // We don't track raw "money in/out" in reports, so we assume net flow from yearlyStats
+                    // But for accuracy, we can sum it up from calc.yearlyStats if available, or re-calc here.
+                    // For speed, let's grab it from the yearlyStats array which already sums "flow".
+                }), { paidNormal: 0, paidAsk: 0, paidDiv: 0 });
+
+                // Calculate Lifetime Net Flow (Money In - Money Out)
+                const lifetimeNetInvested = calc.yearlyStats.reduce((sum, y) => sum + (y.flow || 0), 0);
+
+                const totalTaxPaid = liqStats.paidNormal + liqStats.paidAsk + liqStats.paidDiv;
+                const pendingTax = calc.currentTax; // Calculated in main loop (Liquidation Ask + Normal)
+                const totalTaxLifetime = totalTaxPaid + pendingTax;
+                
+                // Effective Tax % = Total Tax / (Total Gain + Total Tax) 
+                // (Total Gain usually implies "After Tax" in some contexts, but usually it's Tax / Gross Profit)
+                const grossProfit = allTimeGain + totalTaxPaid; // Approx gross
+                const effectiveTaxRate = grossProfit > 0 ? (totalTaxLifetime / grossProfit) * 100 : 0;
+
                 return (
                     <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
+
+{/* --- NEW: LIQUIDATION MODAL --- */}
+                        {showLiquidationModal && (
+                            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowLiquidationModal(false)}>
+                                <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                                    <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                            <i className="ph ph-money text-emerald-600"></i> Likvidationsværdi
+                                        </h3>
+                                        <button onClick={() => setShowLiquidationModal(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x text-lg"></i></button>
+                                    </div>
+                                    
+                                    <div className="p-4 space-y-4">
+                                        {/* 1. Net Cash Result */}
+                                        <div className="text-center p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                                            <div className="text-xs font-bold text-emerald-800 uppercase tracking-wide mb-1">Netto Udbetaling (Estimat)</div>
+                                            <div className="text-3xl font-bold text-emerald-700 tracking-tight">
+                                                {formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}
+                                            </div>
+                                            <div className="text-[10px] text-emerald-600 mt-1">
+                                                Hvis alt sælges og skat betales i dag
+                                            </div>
+                                        </div>
+
+                                        {/* 2. Tax Breakdown */}
+                                        <div className="space-y-2">
+                                            <h4 className="text-xs font-bold text-gray-500 uppercase border-b border-gray-100 pb-1 mb-2">Skatteoverblik</h4>
+                                            
+                                            <div className="flex justify-between text-sm">
+                                                <span className="text-gray-600">Allerede betalt</span>
+                                                <span className="font-mono">{formatCurrencyNoDecimals(totalTaxPaid)}</span>
+                                            </div>
+                                            <div className="pl-2 border-l-2 border-gray-100 text-xs space-y-1 text-gray-500">
+                                                <div className="flex justify-between">
+                                                    <span>Heraf udbytteskat</span>
+                                                    <span>{formatCurrencyNoDecimals(liqStats.paidDiv)}</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span>Heraf restskat</span>
+                                                    <span>{formatCurrencyNoDecimals(liqStats.paidNormal + liqStats.paidAsk)}</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex justify-between text-sm pt-1">
+                                                <span className="text-gray-600">Skyldig ved salg (Lager/Rest)</span>
+                                                <span className="font-mono text-red-600">-{formatCurrencyNoDecimals(pendingTax)}</span>
+                                            </div>
+                                            
+                                            <div className="flex justify-between text-sm font-bold pt-2 border-t border-gray-100 mt-2">
+                                                <span className="text-gray-800">Total Skattebyrde</span>
+                                                <span className="font-mono">{formatCurrencyNoDecimals(totalTaxLifetime)}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* 3. Performance Metrics */}
+                                        <div className="grid grid-cols-2 gap-3 pt-2">
+                                            <div className="bg-gray-50 p-2 rounded border border-gray-100">
+                                                <div className="text-[10px] text-gray-500 uppercase">Effektiv Skat</div>
+                                                <div className="text-lg font-bold text-gray-800">{effectiveTaxRate.toFixed(1)}%</div>
+                                            </div>
+                                            <div className="bg-gray-50 p-2 rounded border border-gray-100">
+                                                <div className="text-[10px] text-gray-500 uppercase">Netto Indskud</div>
+                                                <div className="text-lg font-bold text-gray-800" title="Total indsat minus total hævet">{formatNumber2(lifetimeNetInvested/1000)}k</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* --- BREAKDOWN MODAL --- */}
                         {showGainModal && (
@@ -2136,12 +2229,20 @@
                                 </div>
                             </div>
                             {/* Liquidation */}
-                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                         <div 
+                                onClick={() => setShowLiquidationModal(true)}
+                                className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-emerald-50/50 hover:border-emerald-200 transition-all group"
+                            >
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
                                     <i className="ph ph-bank"></i>Værdi efter skat
                                 </div>
-                                <div className="mt-2">
-                                    <div className="text-3xl font-bold text-gray-900 tracking-tight break-words" style={{ wordBreak: 'break-word' }}>{formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}</div>
+                                <div className="mt-2 flex justify-between items-end">
+                                    <div className="text-3xl font-bold text-gray-900 tracking-tight break-words">
+                                        {formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}
+                                    </div>
+                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity text-emerald-600 mb-1">
+                                        <i className="ph ph-list-magnifying-glass text-xl"></i>
+                                    </div>
                                 </div>
                             </div>
                             {/* All Time Gain */}
