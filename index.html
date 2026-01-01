@@ -1143,12 +1143,12 @@
                     let twrMultiplier = 1.0;
                     let prevDayValue = 0;
 
-                    totalValueGraph.push({ date: getLocalISO(d), value: 0 });
+                    totalValueGraph.push({ date: getLocalISO(d), value: 0, invested: 0 });
                     growthGraphData.push({ date: getLocalISO(d), value: 0 });
 
                     while (d <= now) {
                         const dStr = getLocalISO(d);
-                        let dayInvestedFlow = 0; // Net Cash added/removed
+                        let dayInvestedFlow = 0; // For Dietz (Return %) calc only
 
                         while (txCursor < timeTxs.length && timeTxs[txCursor].date <= d) {
                             const tx = timeTxs[txCursor];
@@ -1157,17 +1157,34 @@
                             const accFx = getFx(accCur, dStr);
 
                             if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
-                                if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cur: tx.currency, ticker: tx.ticker };
+                              if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cost: 0, cur: tx.currency, ticker: tx.ticker };
                                 const p = historyPortfolio[key];
                                 const tradeValDKK = (Math.abs(tx.qty) * tx.price * tx.fxRate);
                                 const commDKK = (tx.commission * accFx);
 
                                 if (tx.type === 'BUY') {
-                                    p.qty += tx.qty;
+                                    // 1. Update Dietz Flow
                                     dayInvestedFlow += (tradeValDKK + commDKK);
+
+                                    // 2. Update Holdings
+                                    p.qty += tx.qty;
+
+                                    // 3. Update Historic Cost (Add purchase price + comm)
+                                    p.cost += (tradeValDKK + commDKK);
                                 } else if (tx.type === 'SELL') {
-                                    p.qty -= Math.abs(tx.qty);
+                                    // 1. Update Dietz Flow
                                     dayInvestedFlow -= (tradeValDKK - commDKK);
+
+                                    // 2. Update Historic Cost (Remove proportional cost of shares sold)
+                                    // If we have 10 shares costing 1000, avg is 100. If we sell 2, we remove 200 cost.
+                                    if (p.qty > 0) {
+                                        const avgCost = p.cost / p.qty;
+                                        const soldQty = Math.abs(tx.qty);
+                                        p.cost -= (avgCost * soldQty);
+                                    }
+
+                                    // 3. Update Holdings
+                                    p.qty -= Math.abs(tx.qty);
                                 }
                             } else if (tx.type === 'DIVIDEND') {
                                 const divValDKK = (tx.qty * (tx.price ?? 1) * tx.fxRate);
@@ -1178,12 +1195,16 @@
                         }
 
                         let dayAssetValue = 0;
+                        let dayInvestedSum = 0; // The sum of Cost Basis for currently held shares
+
                         for (const key in historyPortfolio) {
                             const p = historyPortfolio[key];
                             if (Math.abs(p.qty) > 0.0001) {
                                 const price = getPrice(p.ticker, dStr);
                                 const fx = getFx(p.cur, dStr);
                                 if (price) dayAssetValue += (p.qty * price * fx);
+
+                                dayInvestedSum += p.cost;
                             }
                         }
 
@@ -1200,7 +1221,7 @@
                         prevDayValue = dayAssetValue;
 
                         if (twrMultiplier !== 1 || dayAssetValue > 0) {
-                            totalValueGraph.push({ date: dStr, value: dayAssetValue });
+                            totalValueGraph.push({ date: dStr, value: dayAssetValue, invested: dayInvestedSum });
                             growthGraphData.push({ date: dStr, value: (twrMultiplier - 1) * 100 });
                         }
                         d.setDate(d.getDate() + 1);
@@ -1291,8 +1312,7 @@
                 const lifetimeNetInvested = yearlyStats.reduce((sum, y) => sum + (y.flow || 0), 0);
 
                 // Effective Tax Rate
-                const grossProfit = allTimeGain + totalHistoricTaxCost;
-                const effectiveTaxRate = grossProfit > 0 ? (totalTaxBurden / grossProfit) * 100 : 0;
+                const effectiveTaxRate = allTimeGain > 0 ? (totalTaxBurden / allTimeGain) * 100 : 0;
 
                 // NEW: Structured Breakdown for the Modal
                 const taxBreakdown = [
@@ -2130,7 +2150,7 @@
                     ask: acc.ask + (r.askGain || 0),
                 }), { stocks: 0, etfs: 0, divs: 0, capital: 0, ask: 0 });
 
-                const liq = calc.liquidation; 
+                const liq = calc.liquidation;
                 const lifetimeNetInvested = calc.yearlyStats.reduce((sum, y) => sum + (y.flow || 0), 0);
 
                 return (
@@ -2193,9 +2213,9 @@
                                             </div>
                                             <div className="bg-gray-50 p-2 rounded border border-gray-100">
                                                 <div className="text-[10px] text-gray-500 uppercase">Netto Indskud</div>
-                                             <div className="text-lg font-bold text-gray-800" title="Total indsat minus total hævet">
-        {formatCurrencyNoDecimals(liq.lifetimeNetInvested)}
-    </div>
+                                                <div className="text-lg font-bold text-gray-800" title="Total indsat minus total hævet">
+                                                    {formatCurrencyNoDecimals(liq.lifetimeNetInvested)}
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -2427,7 +2447,15 @@
                                                 {showYearLines && numericYearTicks.map(timestamp => (
                                                     <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
                                                 ))}
-
+                                                <Area
+                                                    type="step"
+                                                    dataKey="invested"
+                                                    stroke="#9ca3af"
+                                                    strokeWidth={1}
+                                                    strokeDasharray="4 4"
+                                                    fill="none"
+                                                    isAnimationActive={false}
+                                                />
                                                 <Area type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={2} fill="url(#colorVal)" isAnimationActive={false} />
                                             </AreaChart>
                                         </ResponsiveContainer>
