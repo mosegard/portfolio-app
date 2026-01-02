@@ -1502,12 +1502,13 @@
                     totalHistoricTaxCost,
                     totalTaxBurden,
                     effectiveTaxRate,
-                    taxBreakdown // <--- Passed to UI
+                    taxBreakdown
                 };
 
                 return {
                     portfolio, reports, totalValueGraph, growthGraphData,
                     currentVal, currentTax, costBasisTotal, liquidation,
+                    liquidationNormalTax,
                     unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats, warnings: executionWarnings
                 };
 
@@ -1793,7 +1794,7 @@
                 const taxableIncome = Math.max(0, shareIncome - r.utilizedLossNormal);
 
                 // Tax Limits (27% bracket limit)
-                const limitBase = TAX_LIMITS[taxYear] || 61000;
+                const limitBase = TAX_LIMITS[taxYear];
                 const limitActual = limitBase * (settings.married ? 2 : 1);
 
                 let taxBill = calculateDanishTax(taxableIncome, limitActual);
@@ -1807,6 +1808,22 @@
 
                 // Progress Bar Calc
                 const progressPct = Math.min(100, Math.max(0, (taxableIncome / limitActual) * 100));
+
+                // --- Additional Planning Metrics (27% bracket & years to sell off) ---
+                const unrealized = calc.unrealizedStockGain || 0;
+                const remaining27Room = Math.max(0, limitActual - taxableIncome);
+                const sellAt27Amount = Math.min(Math.max(0, unrealized), remaining27Room);
+                const additionalTaxAt27 = sellAt27Amount * 0.27;
+                const portionAt42Now = Math.max(0, unrealized - sellAt27Amount);
+                const additionalTaxAt42 = portionAt42Now * 0.42;
+                const optimalLiquidationTax = Math.max(0, unrealized) * 0.27; // Simplified: all realized under 27% over several years
+                const yearsToSellAll = (() => {
+                    if (unrealized <= 0) return 0;
+                    if (remaining27Room >= unrealized) return 1; // all within this year's 27% bracket
+                    const remainingAfterThisYear = unrealized - remaining27Room;
+                    const extraYears = Math.ceil(remainingAfterThisYear / limitActual);
+                    return 1 + extraYears; // current year + future years
+                })();
 
                 return (
                     <div className="p-6 md:p-8 space-y-6 max-w-6xl mx-auto animate-in fade-in duration-300">
@@ -1947,18 +1964,6 @@
                                             {formatCurrencyNoDecimals(taxToPay)}
                                         </span>
                                     </div>
-
-                                    {/* Liquidation Note */}
-                                    {isCurrentYear && (
-                                        <div className="mt-4 pt-3 border-t border-dashed border-gray-300">
-                                            <div className="flex justify-between items-center">
-                                                <span className="text-xs font-bold text-gray-500 uppercase flex items-center gap-1">
-                                                    <i className="ph ph-magic-wand"></i> Yderligere skat hvis alt sælges
-                                                </span>
-                                                <span className="font-bold text-purple-700 font-mono">{formatCurrencyNoDecimals(calc.liquidationNormalTax)}</span>
-                                            </div>
-                                        </div>
-                                    )}
                                 </div>
                             </div>
 
@@ -2037,20 +2042,93 @@
                                         <span className="font-bold text-xl text-teal-700">{formatCurrencyNoDecimals(askTaxToPay)}</span>
                                     </div>
 
-                                    {/* ASK HYPOTHETICAL */}
-                                    {isCurrentYear && (
-                                        <div className="mt-4 pt-3 border-t border-dashed border-gray-300">
-                                            <div className="flex justify-between items-center opacity-50">
-                                                <span className="text-xs font-bold text-gray-500 uppercase flex items-center gap-1">
-                                                    <i className="ph ph-magic-wand"></i> Yderligere skat ved salg
-                                                </span>
-                                                <span className="font-bold text-gray-500 font-mono">0 kr.</span>
-                                            </div>
-                                        </div>
-                                    )}
+
                                 </div>
                             </div>
                         </div>
+
+                        {/* Additional Tax if All Sold (Standalone) */}
+                        {isCurrentYear && (
+                            <div className="card">
+                                <div className="mb-2 flex items-center justify-between">
+                                    <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
+                                        <i className="ph ph-magic-wand text-purple-600"></i>
+                                        Afviklingsoversigt
+                                    </h3>
+                                    <span className="text-xs text-gray-500">År: {taxYear}</span>
+                                </div>
+
+                                {/* Hero gain like 'Aktieindkomst' */}
+                                <div className="flex justify-between items-end mb-3">
+                                    <div>
+                                        <h4 className="font-bold text-sm text-gray-600 flex items-center gap-2">
+                                            <i className="ph ph-trend-up text-blue-600"></i>Urealiseret aktiegevinster
+                                        </h4>
+                                    </div>
+                                    <div className="text-right">
+                                        <div className={`text-xl font-bold leading-none ${unrealized >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                                            {formatCurrencyNoDecimals(unrealized)}
+                                        </div>
+                                    </div>
+                                </div>
+                                {/* Single-line bar reflecting room at 27% vs overflow */}
+                                <div className="mb-4 flex items-center gap-3">
+                                    <div className="relative h-2.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
+                                        {/* Safe Zone (Blue) */}
+                                        <div
+                                            className="absolute top-0 left-0 h-full bg-blue-600 transition-all duration-500 ease-out"
+                                            style={{
+                                                width: `${Math.min(100, (Math.min(unrealized, remaining27Room) / Math.max(unrealized || 1, remaining27Room || 1)) * 100)}%`,
+                                                zIndex: 2
+                                            }}
+                                        />
+                                        {/* Danger Zone (Orange) when unrealized exceeds remaining room */}
+                                        {unrealized > remaining27Room && (
+                                            <div
+                                                className="absolute top-0 left-0 h-full bg-orange-500 transition-all duration-500 ease-out"
+                                                style={{
+                                                    width: '100%',
+                                                    clipPath: `inset(0 0 0 ${Math.min(100, (remaining27Room / (unrealized || 1)) * 100)}%)`
+                                                }}
+                                            />
+                                        )}
+                                        {/* Cut-off marker at remaining room */}
+                                        <div
+                                            className="absolute top-0 bottom-0 w-[2px] bg-white z-10 opacity-50 mix-blend-overlay"
+                                            style={{
+                                                left: `${unrealized > remaining27Room ? (remaining27Room / unrealized) * 100 : 100}%`
+                                            }}
+                                        />
+                                    </div>
+                                    <span className={`text-xs font-bold font-mono min-w-[3.5rem] text-right ${unrealized > remaining27Room ? 'text-orange-500' : 'text-blue-600'}`}>
+                                        {unrealized > 0 ? ((Math.min(unrealized, remaining27Room) / unrealized) * 100).toFixed(1) : '0.0'}%
+                                    </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    {/* Tile: Sell Everything Now */}
+                                    <div className="p-4 rounded border border-gray-200 bg-white">
+                                        <div className="text-xs font-bold text-gray-500 uppercase">Sælg alt nu</div>
+                                        <div className="mt-1 text-2xl font-bold text-purple-700">{formatCurrencyNoDecimals(calc.liquidationNormalTax)}</div>
+                                        <div className="mt-2 text-[11px] text-gray-500">Ekstra skat ved fuld realisering i år.</div>
+                                    </div>
+
+                                    {/* Tile: Optimal Liquidation (27%) */}
+                                    <div className="p-4 rounded border border-gray-200 bg-white">
+                                        <div className="text-xs font-bold text-gray-500 uppercase">Sælg optimalt</div>
+                                        <div className="mt-1 text-2xl font-bold text-blue-700">{formatCurrencyNoDecimals(optimalLiquidationTax)}</div>
+                                        <div className="mt-2 text-[11px] text-gray-500">Estimeret total skat (kun 27% over flere år).</div>
+                                    </div>
+
+                                    {/* Tile: Years to Complete */}
+                                    <div className="p-4 rounded border border-gray-200 bg-white">
+                                        <div className="text-xs font-bold text-gray-500 uppercase">Plan</div>
+                                        <div className="mt-1 text-2xl font-bold text-gray-900">{yearsToSellAll}</div>
+                                        <div className="mt-2 text-[11px] text-gray-500">Estimerede år til fuld afvikling under 27%.</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* 2. DETAILS SECTION (Full Width) */}
                         <div className="card">
