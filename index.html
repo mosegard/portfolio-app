@@ -2313,10 +2313,8 @@
 
                 // Range Selector Component (always dropdown)
                 const RangeSelector = () => {
-                    const currentYear = new Date().getFullYear().toString();
-                    const baseRanges = years.includes(currentYear)
-                        ? ['1M', 'ALL']
-                        : ['1M', 'YTD', 'ALL'];
+                    // Only show '1M', 'ALL' (as 'altid'), and years
+                    const baseRanges = ['1M', 'ALL'];
                     const options = graphRange === 'CUSTOM' ? ['CUSTOM', ...baseRanges, ...years] : [...baseRanges, ...years];
                     const dropdownClass = "px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200";
                     return (
@@ -2327,7 +2325,7 @@
                         >
                             {options.map(r => (
                                 <option key={r} value={r}>
-                                    {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r === 'CUSTOM' ? 'ZOOM' : r}
+                                    {r === '1M' ? '1M' : r === 'ALL' ? 'Altid' : r === 'CUSTOM' ? 'ZOOM' : r}
                                 </option>
                             ))}
                         </select>
@@ -2737,7 +2735,7 @@
                                         <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                                             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                                                 <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                                                    <i className="ph ph-arrow-up-right text-blue-600"></i> Top 3 Movers i dag
+                                                    <i className="ph ph-arrow-up-right text-blue-600"></i> Top 3 bevægelser i dag
                                                 </h3>
                                                 <button onClick={() => setShowMoversModal(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x text-lg"></i></button>
                                             </div>
@@ -3958,7 +3956,7 @@ Proceed?`;
                     {/* Anonymity Blur Overlay */}
                     {settings.anonymityBlur && blurActive && (
                         <div className="anonymity-blur-overlay">
-                            <div className="anonymity-blur-icon" title="Klik for at vise" onClick={() => setBlurActive(false)}>
+                            <div className="anonymity-blur-icon" title="Klik for at vise" onClick={() => { setBlurActive(false); fetchMarketData(false); }}>
                                 <i className="ph ph-eye-slash"></i>
                                 <span>Vis indhold</span>
                             </div>
