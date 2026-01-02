@@ -721,6 +721,27 @@
             const [filters, setFilters] = useState({});
             const [splitParams, setSplitParams] = useState({ ticker: '', num: 2, den: 1, dateIso: '', startDateIso: '', endDateIso: '' });
             const [graphRange, setGraphRange] = useState('ALL'); // '1M', 'YTD', 'ALL'
+            // Dashboard chart enhancements: custom zoom + selection + fullscreen
+            const [customRange, setCustomRange] = useState({ startIso: '', endIso: '' });
+            const [chartSelection, setChartSelection] = useState({ start: null, end: null, chart: null, dragging: false });
+            const [fullscreenChart, setFullscreenChart] = useState(null); // 'growth' | 'value' | null
+
+            // Robust end drag: listen at window; disable text selection while dragging
+            useEffect(() => {
+                if (!chartSelection.dragging) return;
+                const onWinMouseUp = () => {
+                    setChartSelection(s => (s.start != null && s.end != null)
+                        ? { ...s, dragging: false }
+                        : { start: null, end: null, chart: null, dragging: false });
+                };
+                window.addEventListener('mouseup', onWinMouseUp);
+                const prevSelect = document.body.style.userSelect;
+                document.body.style.userSelect = 'none';
+                return () => {
+                    window.removeEventListener('mouseup', onWinMouseUp);
+                    document.body.style.userSelect = prevSelect;
+                };
+            }, [chartSelection.dragging]);
 
             const [showGainModal, setShowGainModal] = useState(false);
             const [showLiquidationModal, setShowLiquidationModal] = useState(false);
@@ -2123,6 +2144,23 @@
                     if (dataset.length === 0) return [];
                     if (graphRange === 'ALL') return dataset;
 
+                    // Custom zoom range
+                    if (graphRange === 'CUSTOM' && customRange.startIso && customRange.endIso) {
+                        const startIso = customRange.startIso <= customRange.endIso ? customRange.startIso : customRange.endIso;
+                        const endIso = customRange.startIso <= customRange.endIso ? customRange.endIso : customRange.startIso;
+                        let sliced = dataset.filter(d => d.date >= startIso && d.date <= endIso);
+                        if (isGrowth && sliced.length > 0) {
+                            const baseVal = sliced[0].value;
+                            const baseMult = (baseVal / 100) + 1;
+                            return sliced.map(d => {
+                                const curMult = (d.value / 100) + 1;
+                                const newVal = ((curMult / baseMult) - 1) * 100;
+                                return { ...d, value: newVal };
+                            });
+                        }
+                        return sliced;
+                    }
+
                     const now = new Date();
                     let startDate = new Date();
                     let endDate = null;
@@ -2202,7 +2240,7 @@
                     const baseRanges = years.includes(currentYear)
                         ? ['1M', 'ALL']
                         : ['1M', 'YTD', 'ALL'];
-                    const options = [...baseRanges, ...years];
+                    const options = graphRange === 'CUSTOM' ? ['CUSTOM', ...baseRanges, ...years] : [...baseRanges, ...years];
                     return (
                         <>
                             {/* Dropdown for small screens */}
@@ -2214,7 +2252,7 @@
                                 >
                                     {options.map(r => (
                                         <option key={r} value={r}>
-                                            {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r}
+                                            {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r === 'CUSTOM' ? 'ZOOM' : r}
                                         </option>
                                     ))}
                                 </select>
@@ -2230,7 +2268,7 @@
                                             : 'text-gray-400 hover:text-gray-600'
                                             }`}
                                     >
-                                        {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r}
+                                        {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r === 'CUSTOM' ? 'ZOOM' : r}
                                     </button>
                                 ))}
                             </div>
@@ -2459,6 +2497,122 @@
                             </ModalPortal>
                         )}
 
+                        {/* --- FULLSCREEN CHART MODAL --- */}
+                        {fullscreenChart && (
+                            <ModalPortal onBackdropClick={() => setFullscreenChart(null)} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-0 bg-black/60">
+                                <div className="w-screen h-screen bg-white flex flex-col" onClick={e => e.stopPropagation()}>
+                                    <div className="h-12 px-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+                                        <div className="flex items-center gap-2">
+                                            <i className="ph ph-arrows-in text-blue-600"></i>
+                                            <span className="font-bold text-sm text-gray-800">{fullscreenChart === 'growth' ? 'Afkast (%)' : 'Porteføljens Værdi'}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <RangeSelector />
+                                            <button className="px-2 py-1 text-xs rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setFullscreenChart(null)}>Luk</button>
+                                        </div>
+                                    </div>
+                                    <div className={`flex-1 relative ${chartSelection.dragging ? 'select-none' : ''}`}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            {fullscreenChart === 'growth' ? (
+                                                <AreaChart data={numericGrowthData}
+                                                    onMouseDown={(e) => { const se = e && e.sourceEvent; if (se && se.preventDefault) se.preventDefault(); if (e && e.activeLabel != null) setChartSelection({ start: e.activeLabel, end: null, chart: 'growth', dragging: true }); }}
+                                                    onMouseMove={(e) => { if (chartSelection.dragging && chartSelection.chart === 'growth' && e && e.activeLabel != null) setChartSelection(s => ({ ...s, end: e.activeLabel })); }}
+                                                    onMouseUp={() => { if (chartSelection.dragging && chartSelection.chart === 'growth' && chartSelection.start != null && chartSelection.end != null) setChartSelection(s => ({ ...s, dragging: false })); else setChartSelection({ start: null, end: null, chart: null, dragging: false }); }}
+                                                    onMouseLeave={() => { setChartSelection(s => s.dragging ? (s.start != null && s.end != null) ? { ...s, dragging: false } : { start: null, end: null, chart: null, dragging: false } : s); }}
+                                                >
+                                                    <defs>
+                                                        <linearGradient id="colorGrowthFs" x1="0" y1="0" x2="0" y2="1">
+                                                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                                                            <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                                                    <XAxis dataKey="date" type="number" domain={['dataMin', 'dataMax']} tickFormatter={formatAxisDateNumeric} ticks={graphRange === 'ALL' ? numericYearTicks : null} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9ca3af' }} minTickGap={30} />
+                                                    <YAxis width={60} axisLine={false} tickLine={false} tickFormatter={(v) => `${v.toFixed(0)}%`} tick={{ fontSize: 12, fill: '#9ca3af' }} />
+                                                    <Tooltip formatter={(v) => `${v.toFixed(2)}%`} labelFormatter={formatAxisDateNumeric} />
+                                                    <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
+                                                    {showYearLines && numericYearTicks.map(timestamp => (<ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />))}
+                                                    {(chartSelection.chart === 'growth' && chartSelection.start != null && chartSelection.end != null) && (
+                                                        <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill="#10b981" fillOpacity={0.1} />
+                                                    )}
+                                                    <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowthFs)" isAnimationActive={false} />
+                                                </AreaChart>
+                                            ) : (
+                                                <AreaChart data={numericValueData}
+                                                    onMouseDown={(e) => { const se = e && e.sourceEvent; if (se && se.preventDefault) se.preventDefault(); if (e && e.activeLabel != null) setChartSelection({ start: e.activeLabel, end: null, chart: 'value', dragging: true }); }}
+                                                    onMouseMove={(e) => { if (chartSelection.dragging && chartSelection.chart === 'value' && e && e.activeLabel != null) setChartSelection(s => ({ ...s, end: e.activeLabel })); }}
+                                                    onMouseUp={() => { if (chartSelection.dragging && chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null) setChartSelection(s => ({ ...s, dragging: false })); else setChartSelection({ start: null, end: null, chart: null, dragging: false }); }}
+                                                    onMouseLeave={() => { setChartSelection(s => s.dragging ? (s.start != null && s.end != null) ? { ...s, dragging: false } : { start: null, end: null, chart: null, dragging: false } : s); }}
+                                                >
+                                                    <defs>
+                                                        <linearGradient id="colorValFs" x1="0" y1="0" x2="0" y2="1">
+                                                            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
+                                                            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                                                    <XAxis dataKey="date" type="number" domain={['dataMin', 'dataMax']} tickFormatter={formatAxisDateNumeric} ticks={graphRange === 'ALL' ? numericYearTicks : null} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#9ca3af' }} minTickGap={30} />
+                                                    <YAxis width={60} axisLine={false} tickLine={false} domain={['dataMin', 'dataMax']} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 12, fill: '#9ca3af' }} />
+                                                    <Tooltip formatter={(v) => formatCurrency(v)} labelFormatter={formatAxisDateNumeric} />
+                                                    {showYearLines && numericYearTicks.map(timestamp => (<ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />))}
+                                                    {(chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null) && (
+                                                        <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill="#2563eb" fillOpacity={0.1} />
+                                                    )}
+                                                    <Area type="step" dataKey="invested" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
+                                                    <Area type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={2} fill="url(#colorValFs)" isAnimationActive={false} />
+                                                </AreaChart>
+                                            )}
+                                        </ResponsiveContainer>
+                                        {/* Selection overlay in fullscreen */}
+                                        {fullscreenChart === 'growth' && chartSelection.chart === 'growth' && chartSelection.start != null && chartSelection.end != null && (() => {
+                                            const startTs = Math.min(chartSelection.start, chartSelection.end);
+                                            const endTs = Math.max(chartSelection.start, chartSelection.end);
+                                            const inRange = numericGrowthData.filter(d => d.date >= startTs && d.date <= endTs);
+                                            if (inRange.length < 2) return null;
+                                            const startVal = inRange[0].value;
+                                            const endVal = inRange[inRange.length - 1].value;
+                                            const abs = endVal - startVal;
+                                            return (
+                                                <div className="absolute top-4 right-4 bg-white/95 backdrop-blur rounded-md border border-gray-200 shadow-sm px-3 py-2 flex items-center gap-2">
+                                                    <div className={`text-sm font-mono ${abs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{abs >= 0 ? '+' : ''}{abs.toFixed(2)}%</div>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => {
+                                                        const toIso = (ts) => new Date(ts).toISOString().split('T')[0];
+                                                        setCustomRange({ startIso: toIso(startTs), endIso: toIso(endTs) });
+                                                        setGraphRange('CUSTOM');
+                                                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                                                    }}>Zoom ind</button>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setChartSelection({ start: null, end: null, chart: null, dragging: false })}>Ryd</button>
+                                                </div>
+                                            );
+                                        })()}
+                                        {fullscreenChart === 'value' && chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null && (() => {
+                                            const startTs = Math.min(chartSelection.start, chartSelection.end);
+                                            const endTs = Math.max(chartSelection.start, chartSelection.end);
+                                            const inRange = numericValueData.filter(d => d.date >= startTs && d.date <= endTs);
+                                            if (inRange.length < 2) return null;
+                                            const startVal = inRange[0].value;
+                                            const endVal = inRange[inRange.length - 1].value;
+                                            const abs = endVal - startVal;
+                                            const pct = startVal > 0 ? (abs / startVal) * 100 : 0;
+                                            return (
+                                                <div className="absolute top-4 right-4 bg-white/95 backdrop-blur rounded-md border border-gray-200 shadow-sm px-3 py-2 flex items-center gap-2">
+                                                    <div className={`text-sm font-mono ${abs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{abs >= 0 ? '+' : ''}{formatCurrencyNoDecimals(abs)}</div>
+                                                    <div className={`text-xs font-mono ${pct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>({pct.toFixed(2)}%)</div>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => {
+                                                        const toIso = (ts) => new Date(ts).toISOString().split('T')[0];
+                                                        setCustomRange({ startIso: toIso(startTs), endIso: toIso(endTs) });
+                                                        setGraphRange('CUSTOM');
+                                                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                                                    }}>Zoom ind</button>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setChartSelection({ start: null, end: null, chart: null, dragging: false })}>Ryd</button>
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            </ModalPortal>
+                        )}
+
                         {/* 1. TOP CARDS */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-6">
                             {/* Value */}
@@ -2659,12 +2813,44 @@
                                 <div className="bg-white p-4 rounded-xl border shadow-sm">
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="font-bold text-gray-800 text-sm uppercase">Afkast (%)</h3>
-                                        <RangeSelector />
+                                        <div className="flex items-center gap-2">
+                                            <button title="Fuld skærm"
+                                                className="px-2 py-1 text-xs rounded-md border border-gray-200 hover:bg-gray-100"
+                                                onClick={() => setFullscreenChart('growth')}
+                                            >
+                                                <i className="ph ph-arrows-out"></i>
+                                            </button>
+                                            <RangeSelector />
+                                        </div>
                                     </div>
-                                    <div className="h-64 w-full">
+                                    <div className={`relative h-64 w-full ${chartSelection.dragging ? 'select-none' : ''}`}>
                                         <ResponsiveContainer width="100%" height="100%">
                                             {/* Use numericGrowthData */}
-                                            <AreaChart data={numericGrowthData}>
+                                            <AreaChart data={numericGrowthData}
+                                                onMouseDown={(e) => {
+                                                    const se = e && e.sourceEvent; if (se && se.preventDefault) se.preventDefault();
+                                                    if (e && e.activeLabel != null) {
+                                                        setChartSelection({ start: e.activeLabel, end: null, chart: 'growth', dragging: true });
+                                                    }
+                                                }}
+                                                onMouseMove={(e) => {
+                                                    if (chartSelection.dragging && chartSelection.chart === 'growth' && e && e.activeLabel != null) {
+                                                        setChartSelection(s => ({ ...s, end: e.activeLabel }));
+                                                    }
+                                                }}
+                                                onMouseUp={() => {
+                                                    if (chartSelection.dragging && chartSelection.chart === 'growth' && chartSelection.start != null && chartSelection.end != null) {
+                                                        setChartSelection(s => ({ ...s, dragging: false }));
+                                                    } else {
+                                                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                                                    }
+                                                }}
+                                                onMouseLeave={() => {
+                                                    setChartSelection(s => s.dragging
+                                                        ? (s.start != null && s.end != null) ? { ...s, dragging: false } : { start: null, end: null, chart: null, dragging: false }
+                                                        : s);
+                                                }}
+                                            >
                                                 <defs>
                                                     <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
                                                         <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
@@ -2698,9 +2884,36 @@
                                                     <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
                                                 ))}
 
+                                                {/* Selection area */}
+                                                {(chartSelection.chart === 'growth' && chartSelection.start != null && chartSelection.end != null) && (
+                                                    <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill="#10b981" fillOpacity={0.1} />
+                                                )}
+
                                                 <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowth)" isAnimationActive={false} />
                                             </AreaChart>
                                         </ResponsiveContainer>
+                                        {/* Selection overlay */}
+                                        {(chartSelection.chart === 'growth' && chartSelection.start != null && chartSelection.end != null) && (() => {
+                                            const startTs = Math.min(chartSelection.start, chartSelection.end);
+                                            const endTs = Math.max(chartSelection.start, chartSelection.end);
+                                            const inRange = numericGrowthData.filter(d => d.date >= startTs && d.date <= endTs);
+                                            if (inRange.length < 2) return null;
+                                            const startVal = inRange[0].value;
+                                            const endVal = inRange[inRange.length - 1].value;
+                                            const abs = endVal - startVal;
+                                            return (
+                                                <div className="absolute top-2 right-2 bg-white/95 backdrop-blur rounded-md border border-gray-200 shadow-sm px-3 py-2 flex items-center gap-2">
+                                                    <div className={`text-sm font-mono ${abs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{abs >= 0 ? '+' : ''}{abs.toFixed(2)}%</div>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => {
+                                                        const toIso = (ts) => new Date(ts).toISOString().split('T')[0];
+                                                        setCustomRange({ startIso: toIso(startTs), endIso: toIso(endTs) });
+                                                        setGraphRange('CUSTOM');
+                                                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                                                    }}>Zoom ind</button>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setChartSelection({ start: null, end: null, chart: null, dragging: false })}>Ryd</button>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
 
@@ -2708,12 +2921,44 @@
                                 <div className="bg-white p-4 rounded-xl border shadow-sm">
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="font-bold text-gray-800 text-sm uppercase">Porteføljens Værdi</h3>
-                                        <RangeSelector />
+                                        <div className="flex items-center gap-2">
+                                            <button title="Fuld skærm"
+                                                className="px-2 py-1 text-xs rounded-md border border-gray-200 hover:bg-gray-100"
+                                                onClick={() => setFullscreenChart('value')}
+                                            >
+                                                <i className="ph ph-arrows-out"></i>
+                                            </button>
+                                            <RangeSelector />
+                                        </div>
                                     </div>
-                                    <div className="h-64 w-full">
+                                    <div className={`relative h-64 w-full ${chartSelection.dragging ? 'select-none' : ''}`}>
                                         <ResponsiveContainer width="100%" height="100%">
                                             {/* Use numericValueData */}
-                                            <AreaChart data={numericValueData}>
+                                            <AreaChart data={numericValueData}
+                                                onMouseDown={(e) => {
+                                                    const se = e && e.sourceEvent; if (se && se.preventDefault) se.preventDefault();
+                                                    if (e && e.activeLabel != null) {
+                                                        setChartSelection({ start: e.activeLabel, end: null, chart: 'value', dragging: true });
+                                                    }
+                                                }}
+                                                onMouseMove={(e) => {
+                                                    if (chartSelection.dragging && chartSelection.chart === 'value' && e && e.activeLabel != null) {
+                                                        setChartSelection(s => ({ ...s, end: e.activeLabel }));
+                                                    }
+                                                }}
+                                                onMouseUp={() => {
+                                                    if (chartSelection.dragging && chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null) {
+                                                        setChartSelection(s => ({ ...s, dragging: false }));
+                                                    } else {
+                                                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                                                    }
+                                                }}
+                                                onMouseLeave={() => {
+                                                    setChartSelection(s => s.dragging
+                                                        ? (s.start != null && s.end != null) ? { ...s, dragging: false } : { start: null, end: null, chart: null, dragging: false }
+                                                        : s);
+                                                }}
+                                            >
                                                 <defs>
                                                     <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
                                                         <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
@@ -2744,6 +2989,10 @@
                                                 {showYearLines && numericYearTicks.map(timestamp => (
                                                     <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
                                                 ))}
+                                                {/* Selection area */}
+                                                {(chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null) && (
+                                                    <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill="#2563eb" fillOpacity={0.1} />
+                                                )}
                                                 <Area
                                                     type="step"
                                                     dataKey="invested"
@@ -2756,6 +3005,30 @@
                                                 <Area type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={2} fill="url(#colorVal)" isAnimationActive={false} />
                                             </AreaChart>
                                         </ResponsiveContainer>
+                                        {/* Selection overlay */}
+                                        {(chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null) && (() => {
+                                            const startTs = Math.min(chartSelection.start, chartSelection.end);
+                                            const endTs = Math.max(chartSelection.start, chartSelection.end);
+                                            const inRange = numericValueData.filter(d => d.date >= startTs && d.date <= endTs);
+                                            if (inRange.length < 2) return null;
+                                            const startVal = inRange[0].value;
+                                            const endVal = inRange[inRange.length - 1].value;
+                                            const abs = endVal - startVal;
+                                            const pct = startVal > 0 ? (abs / startVal) * 100 : 0;
+                                            return (
+                                                <div className="absolute top-2 right-2 bg-white/95 backdrop-blur rounded-md border border-gray-200 shadow-sm px-3 py-2 flex items-center gap-2">
+                                                    <div className={`text-sm font-mono ${abs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{abs >= 0 ? '+' : ''}{formatCurrencyNoDecimals(abs)}</div>
+                                                    <div className={`text-xs font-mono ${pct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>({pct.toFixed(2)}%)</div>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => {
+                                                        const toIso = (ts) => new Date(ts).toISOString().split('T')[0];
+                                                        setCustomRange({ startIso: toIso(startTs), endIso: toIso(endTs) });
+                                                        setGraphRange('CUSTOM');
+                                                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                                                    }}>Zoom ind</button>
+                                                    <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setChartSelection({ start: null, end: null, chart: null, dragging: false })}>Ryd</button>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
 
