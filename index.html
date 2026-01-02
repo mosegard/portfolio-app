@@ -701,7 +701,7 @@
             const [marketData, setMarketData] = useState(() => JSON.parse(localStorage.getItem('marketDataCache') || '{}'));
             // --- Anonymity Setting ---
             const [settings, setSettings] = useState(() => {
-                let s = { proxyUrl: 'https://corsproxy.io/?', married: true, anonymityBlur: true };
+                let s = { proxyUrl: 'https://corsproxy.io/?', married: true, anonymityBlur: true, benchmarkTicker: '' };
                 try {
                     const stored = JSON.parse(localStorage.getItem('portfolio_settings') || '{}');
                     s = { ...s, ...stored };
@@ -844,7 +844,8 @@
 
                 // Identify all tickers
                 const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
-                const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`)];
+                const bench = settings.benchmarkTicker ? [settings.benchmarkTicker] : [];
+                const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...bench];
 
                 if (allTickers.length === 0) {
                     if (!silent) setLoading(false);
@@ -868,6 +869,7 @@
                                 myStart = (firstTx.date.getTime() / 1000) - (30 * 24 * 60 * 60);
                             }
                         }
+                        // For benchmarks, use global start (already set)
                         // -----------------------------
 
                         const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${now}&interval=1d&events=div`;
@@ -2202,6 +2204,60 @@
                 const displayValueData = getFilteredData(calc.totalValueGraph, false);
                 const displayGrowthData = getFilteredData(calc.growthGraphData, true);
 
+                // Benchmark options (Yahoo Finance tickers)
+                const BENCHMARKS = [
+                    { label: 'Ingen', ticker: '' },
+                    { label: 'All Country World', ticker: 'SPYY.DE' },
+                    { label: 'Developed World', ticker: 'URTH' },
+                    { label: 'Europe', ticker: 'XEU.TO' },
+                    { label: 'S&P 500', ticker: '^GSPC' },
+                    { label: 'NASDAQ 100', ticker: '^NDX' },
+                    { label: 'Dow Jones', ticker: '^DJI' },
+                    { label: 'DK C25', ticker: '^OMXC25' },
+                    { label: 'Nvidia', ticker: 'NVDA' }
+                ];
+                const benchLabel = (BENCHMARKS.find(b => b.ticker === settings.benchmarkTicker) || BENCHMARKS[0]).label;
+
+                // Build benchmark growth series aligned to displayGrowthData
+                let mergedGrowthData = displayGrowthData;
+                if (settings.benchmarkTicker) {
+                    const hist = (marketData[settings.benchmarkTicker]?.history || []).slice();
+                    if (hist.length > 0 && displayGrowthData.length > 0) {
+                        // Create date->close map for fast lookup
+                        const closeMap = new Map(hist.map(h => [h.date, h.close]));
+                        // Determine base price: closest available on or before first display date
+                        const startIso = displayGrowthData[0].date;
+                        let basePrice = null;
+                        // Try exact date, else search backwards in history
+                        if (closeMap.has(startIso)) basePrice = closeMap.get(startIso);
+                        if (basePrice == null) {
+                            // find latest hist before startIso
+                            let candidate = null;
+                            for (let i = hist.length - 1; i >= 0; i--) {
+                                if (hist[i].date <= startIso) { candidate = hist[i].close; break; }
+                            }
+                            basePrice = candidate ?? hist[0].close;
+                        }
+                        if (basePrice && basePrice > 0) {
+                            // Compose merged growth data with benchmark % return
+                            mergedGrowthData = displayGrowthData.map(d => {
+                                // Find latest close on or before this date
+                                let price = closeMap.get(d.date);
+                                if (price == null) {
+                                    // find latest before
+                                    let p = null;
+                                    for (let i = hist.length - 1; i >= 0; i--) {
+                                        if (hist[i].date <= d.date) { p = hist[i].close; break; }
+                                    }
+                                    price = p ?? basePrice;
+                                }
+                                const benchRet = ((price / basePrice) - 1) * 100;
+                                return { ...d, benchmark: benchRet };
+                            });
+                        }
+                    }
+                }
+
                 const formatAxisDate = (dateStr) => {
                     if (!dateStr) return '';
                     // dateStr is "YYYY-MM-DD"
@@ -2234,45 +2290,26 @@
                     }
                 }
 
-                // Range Selector Component
+                // Range Selector Component (always dropdown)
                 const RangeSelector = () => {
                     const currentYear = new Date().getFullYear().toString();
                     const baseRanges = years.includes(currentYear)
                         ? ['1M', 'ALL']
                         : ['1M', 'YTD', 'ALL'];
                     const options = graphRange === 'CUSTOM' ? ['CUSTOM', ...baseRanges, ...years] : [...baseRanges, ...years];
+                    const dropdownClass = "px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200";
                     return (
-                        <>
-                            {/* Dropdown for small screens */}
-                            <div className="block xl:hidden">
-                                <select
-                                    className="px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200"
-                                    value={graphRange}
-                                    onChange={e => setGraphRange(e.target.value)}
-                                >
-                                    {options.map(r => (
-                                        <option key={r} value={r}>
-                                            {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r === 'CUSTOM' ? 'ZOOM' : r}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                            {/* Button group for medium and up */}
-                            <div className="hidden xl:flex bg-gray-100 p-0.5 rounded-lg flex-wrap gap-1">
-                                {options.map(r => (
-                                    <button
-                                        key={r}
-                                        onClick={() => setGraphRange(r)}
-                                        className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${graphRange === r
-                                            ? 'bg-white text-blue-600 shadow-sm'
-                                            : 'text-gray-400 hover:text-gray-600'
-                                            }`}
-                                    >
-                                        {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r === 'CUSTOM' ? 'ZOOM' : r}
-                                    </button>
-                                ))}
-                            </div>
-                        </>
+                        <select
+                            className={dropdownClass}
+                            value={graphRange}
+                            onChange={e => setGraphRange(e.target.value)}
+                        >
+                            {options.map(r => (
+                                <option key={r} value={r}>
+                                    {r === '1M' ? '1M' : r === 'YTD' ? 'YTD' : r === 'ALL' ? 'ALL' : r === 'CUSTOM' ? 'ZOOM' : r}
+                                </option>
+                            ))}
+                        </select>
                     );
                 };
 
@@ -2282,7 +2319,7 @@
                 // 2. PREPARE DATA: Convert date strings to numbers for the charts
                 // We do this here so we don't mess up your original calculation logic
                 const numericValueData = displayValueData.map(d => ({ ...d, date: toUnix(d.date) }));
-                const numericGrowthData = displayGrowthData.map(d => ({ ...d, date: toUnix(d.date) }));
+                const numericGrowthData = mergedGrowthData.map(d => ({ ...d, date: toUnix(d.date) }));
 
                 // 3. PREPARE TICKS: Convert your yearTicks to numbers
                 const numericYearTicks = yearTicks.map(dateStr => toUnix(dateStr));
@@ -2505,9 +2542,25 @@
                                         <div className="flex items-center gap-2">
                                             <i className="ph ph-arrows-in text-blue-600"></i>
                                             <span className="font-bold text-sm text-gray-800">{fullscreenChart === 'growth' ? 'Afkast (%)' : 'Porteføljens Værdi'}</span>
+                                            {fullscreenChart === 'growth' && settings.benchmarkTicker && (() => {
+                                                const last = numericGrowthData[numericGrowthData.length - 1];
+                                                const diff = (last?.value ?? 0) - (last?.benchmark ?? 0);
+                                                if (!isFinite(diff)) return null;
+                                                return (
+                                                    <span className={`ml-2 text-xs font-mono px-2 py-0.5 rounded ${diff >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>vs {benchLabel}: {diff >= 0 ? '+' : ''}{diff.toFixed(2)}%</span>
+                                                );
+                                            })()}
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <RangeSelector />
+                                            {/* Benchmark Selector */}
+                                            <select
+                                                className="px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200"
+                                                value={settings.benchmarkTicker}
+                                                onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}
+                                            >
+                                                {BENCHMARKS.map(b => (<option key={b.ticker} value={b.ticker}>{b.label}</option>))}
+                                            </select>
                                             <button className="px-2 py-1 text-xs rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setFullscreenChart(null)}>Luk</button>
                                         </div>
                                     </div>
@@ -2536,6 +2589,9 @@
                                                         <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill="#10b981" fillOpacity={0.1} />
                                                     )}
                                                     <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowthFs)" isAnimationActive={false} />
+                                                    {settings.benchmarkTicker && (
+                                                        <Area type="monotone" dataKey="benchmark" stroke="#f59e0b" strokeWidth={2} fill="none" isAnimationActive={false} />
+                                                    )}
                                                 </AreaChart>
                                             ) : (
                                                 <AreaChart data={numericValueData}
@@ -2821,6 +2877,22 @@
                                                 <i className="ph ph-arrows-out"></i>
                                             </button>
                                             <RangeSelector />
+                                            {/* Benchmark Selector */}
+                                            <select
+                                                className="px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200"
+                                                value={settings.benchmarkTicker}
+                                                onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}
+                                            >
+                                                {BENCHMARKS.map(b => (<option key={b.ticker} value={b.ticker}>{b.label}</option>))}
+                                            </select>
+                                            {settings.benchmarkTicker && (() => {
+                                                const last = numericGrowthData[numericGrowthData.length - 1];
+                                                const diff = (last?.value ?? 0) - (last?.benchmark ?? 0);
+                                                if (!isFinite(diff)) return null;
+                                                return (
+                                                    <span className={`text-xs font-mono px-2 py-0.5 rounded ${diff >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>vs {benchLabel}: {diff >= 0 ? '+' : ''}{diff.toFixed(2)}%</span>
+                                                );
+                                            })()}
                                         </div>
                                     </div>
                                     <div className={`relative h-64 w-full ${chartSelection.dragging ? 'select-none' : ''}`}>
@@ -2890,6 +2962,9 @@
                                                 )}
 
                                                 <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowth)" isAnimationActive={false} />
+                                                {settings.benchmarkTicker && (
+                                                    <Area type="monotone" dataKey="benchmark" stroke="#f59e0b" strokeWidth={2} fill="none" isAnimationActive={false} />
+                                                )}
                                             </AreaChart>
                                         </ResponsiveContainer>
                                         {/* Selection overlay */}
