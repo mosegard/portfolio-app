@@ -221,10 +221,31 @@
             font-weight: 600;
             background-color: #eff6ff;
         }
+
+        /* Disable hover effects on touch devices */
+        body.touch-device .nav-item:hover,
+        body.touch-device .sub-nav-item:hover,
+        body.touch-device .card:hover,
+        body.touch-device [class*="hover:"] {
+            /* Remove hover styles for touch devices */
+            background: inherit !important;
+            color: inherit !important;
+            border-color: inherit !important;
+            box-shadow: none !important;
+        }
     </style>
 </head>
 
 <body>
+
+    <script>
+        // Add 'touch-device' class to body if touch is supported
+        if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+            document.addEventListener('DOMContentLoaded', function () {
+                document.body.classList.add('touch-device');
+            });
+        }
+    </script>
     <div id="root" class="h-full"></div>
 
     <script type="text/babel">
