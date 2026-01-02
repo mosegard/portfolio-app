@@ -128,6 +128,48 @@
             z-index: 20;
         }
 
+        /* Anonymity Blur Overlay */
+        .anonymity-blur-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(18px) brightness(1.08);
+            transition: opacity 0.3s;
+        }
+
+        .anonymity-blur-icon {
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 50%;
+            box-shadow: 0 2px 16px 0 rgba(0, 0, 0, 0.10);
+            padding: 32px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: box-shadow 0.2s;
+        }
+
+        .anonymity-blur-icon:hover {
+            box-shadow: 0 4px 32px 0 rgba(59, 130, 246, 0.15);
+        }
+
+        .anonymity-blur-icon i {
+            font-size: 3rem;
+            color: #2563eb;
+        }
+
+        .anonymity-blur-icon span {
+            margin-top: 12px;
+            font-size: 1rem;
+            color: #2563eb;
+            font-weight: 600;
+        }
+
         .card {
             background: white;
             border-radius: 12px;
@@ -622,9 +664,29 @@
             return <input ref={inputRef} className="w-24 input-base p-1 rounded font-mono cursor-pointer" onKeyDown={onKeyDown} />;
         };
 
+        // --- MODAL PORTAL (renders overlays at document.body to avoid layout shifts) ---
+        const ModalPortal = ({ children, onBackdropClick, backdropClassName = "fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" }) => {
+            const elRef = React.useRef(null);
+            if (!elRef.current) elRef.current = document.createElement('div');
+            React.useEffect(() => {
+                const el = elRef.current;
+                document.body.appendChild(el);
+                return () => { try { document.body.removeChild(el); } catch { } };
+            }, []);
+            return ReactDOM.createPortal(
+                <div className={backdropClassName} onClick={(e) => { e.stopPropagation(); if (onBackdropClick) onBackdropClick(e); }}>
+                    {children}
+                </div>,
+                elRef.current
+            );
+        };
+
         // --- APP COMPONENT ---
+
         function App() {
             const [lastUpdate, setLastUpdate] = useState(null);
+            // State for Top Movers Modal
+            const [showMoversModal, setShowMoversModal] = useState(false);
             const [config, setConfig] = useState({
                 askAccount: '',
                 currencies: {},
@@ -637,7 +699,17 @@
             const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
             const [marketData, setMarketData] = useState(() => JSON.parse(localStorage.getItem('marketDataCache') || '{}'));
-            const [settings, setSettings] = useState({ proxyUrl: 'https://corsproxy.io/?', married: true });
+            // --- Anonymity Setting ---
+            const [settings, setSettings] = useState(() => {
+                let s = { proxyUrl: 'https://corsproxy.io/?', married: true, anonymityBlur: true };
+                try {
+                    const stored = JSON.parse(localStorage.getItem('portfolio_settings') || '{}');
+                    s = { ...s, ...stored };
+                } catch { }
+                // If anonymityBlur is undefined, default to true
+                if (typeof s.anonymityBlur === 'undefined') s.anonymityBlur = true;
+                return s;
+            });
             const [loading, setLoading] = useState(false);
 
             const [ghConfig, setGhConfig] = useState({ owner: '', repo: 'portfolio', path: 'portfolio-data.csv', token: '' });
@@ -652,6 +724,63 @@
 
             const [showGainModal, setShowGainModal] = useState(false);
             const [showLiquidationModal, setShowLiquidationModal] = useState(false);
+            const [showAllocationModal, setShowAllocationModal] = useState(false);
+            const [allocationMode, setAllocationMode] = useState('currency'); // 'currency' | 'country' | 'ticker'
+
+            // --- Helpers: FX and Position Valuation ---
+            const getFxRate = (cur) => {
+                const C = (cur || '').toUpperCase();
+                if (!C || C === 'DKK') return 1;
+                const fxM = marketData[`${C}DKK=X`] || {};
+                return (fxM.price ?? fxM.previousClose ?? 1);
+            };
+
+            const getPositionValue = (p) => {
+                if (!p || Math.abs(p.qty) < 0.01) return 0;
+                const m = marketData[p.ticker] || {};
+                const price = m.price ?? m.previousClose ?? 0;
+                const fxRate = getFxRate(p.cur);
+                return p.qty * price * fxRate;
+            };
+
+            const getPositionValueWithPrev = (p) => {
+                if (!p || Math.abs(p.qty) < 0.01) {
+                    const fxRate = getFxRate(p?.cur);
+                    return { val: 0, prevVal: 0, price: 0, prevClose: 0, fxRate };
+                }
+                const m = marketData[p.ticker] || {};
+                const price = m.price ?? m.previousClose ?? 0;
+                const prevClose = m.previousClose ?? price;
+                const fxRate = getFxRate(p.cur);
+                const val = p.qty * price * fxRate;
+                const prevVal = p.qty * prevClose * fxRate;
+                return { val, prevVal, price, prevClose, fxRate };
+            };
+
+            // --- Anonymity Blur State ---
+            const [blurActive, setBlurActive] = useState(false);
+
+            // Save settings to localStorage when changed
+            useEffect(() => {
+                try {
+                    localStorage.setItem('portfolio_settings', JSON.stringify(settings));
+                } catch { }
+            }, [settings]);
+
+            // Blur logic: listen for window blur/focus
+            useEffect(() => {
+                if (!settings.anonymityBlur) return;
+                const onBlur = () => setBlurActive(true);
+                window.addEventListener('blur', onBlur);
+                return () => {
+                    window.removeEventListener('blur', onBlur);
+                };
+            }, [settings.anonymityBlur]);
+
+            // On mount, if window is not focused and setting is on, blur
+            useEffect(() => {
+                if (settings.anonymityBlur && document.hasFocus() === false) setBlurActive(true);
+            }, [settings.anonymityBlur]);
 
             useEffect(() => {
                 const saved = localStorage.getItem('gh_config');
@@ -1157,7 +1286,7 @@
                             const accFx = getFx(accCur, dStr);
 
                             if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
-                              if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cost: 0, cur: tx.currency, ticker: tx.ticker };
+                                if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cost: 0, cur: tx.currency, ticker: tx.ticker };
                                 const p = historyPortfolio[key];
                                 const tradeValDKK = (Math.abs(tx.qty) * tx.price * tx.fxRate);
                                 const commDKK = (tx.commission * accFx);
@@ -1375,12 +1504,9 @@
 
                 list.forEach(p => {
                     const m = marketData[p.ticker] || {};
-                    const price = m.price || 0;
-                    const fxM = marketData[`${p.cur}DKK=X`];
-                    const fxRate = fxM?.price || 1;
+                    const { val, price, prevClose, fxRate } = getPositionValueWithPrev(p);
 
                     // 1. Calculate Value & Cost (Always Total)
-                    const val = p.qty * price * fxRate;
                     const cost = p.qty * p.avg;
                     totalVal += val;
                     totalCost += cost;
@@ -1392,7 +1518,6 @@
                         lastTrade.getFullYear() === now.getFullYear();
 
                     // 3. Calculate Day Gain for this specific stock
-                    const prevClose = m.previousClose || price;
                     let dailyGainVal = 0;
                     if (price > 0 && prevClose > 0) {
                         const dailyDiff = price - prevClose;
@@ -1470,10 +1595,7 @@
                                     <tbody className="divide-y">
                                         {list.map(p => {
                                             const m = marketData[p.ticker] || {};
-                                            const price = m.price || 0;
-                                            const fxM = marketData[`${p.cur}DKK=X`];
-                                            const fxRate = fxM?.price || 1;
-                                            const val = p.qty * price * fxRate;
+                                            const { val, price, prevClose, fxRate } = getPositionValueWithPrev(p);
                                             const gain = val - (p.qty * p.avg);
                                             const costBasis = (p.qty * p.avg);
                                             const pct = costBasis > 0 ? (gain / costBasis) * 100 : null;
@@ -1491,7 +1613,6 @@
                                             // "Pulse" dot logic (active recently)
                                             const isMarketOpen = lastTradeTime > 0 && diffSeconds < 2700;
 
-                                            const prevClose = m.previousClose || price;
                                             let dailyGainVal = 0;
                                             let dailyPct = 0;
                                             let debugTitle = "No Data";
@@ -2156,9 +2277,82 @@
                 return (
                     <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
 
+                        {/* --- VALUE ALLOCATION MODAL --- */}
+                        {showAllocationModal && (
+                            <ModalPortal onBackdropClick={() => setShowAllocationModal(false)}>
+                                <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                                    <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                            <i className="ph ph-wallet text-blue-600"></i> Værdi – Allokering
+                                        </h3>
+                                        <button onClick={() => setShowAllocationModal(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x text-lg"></i></button>
+                                    </div>
+                                    <div className="p-4 space-y-4">
+                                        <div className="flex items-center gap-2">
+                                            <button className={`px-3 py-1 rounded text-sm border ${allocationMode === 'currency' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700'}`} onClick={() => setAllocationMode('currency')}>Valuta</button>
+                                            <button className={`px-3 py-1 rounded text-sm border ${allocationMode === 'country' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700'}`} onClick={() => setAllocationMode('country')}>Land</button>
+                                            <button className={`px-3 py-1 rounded text-sm border ${allocationMode === 'ticker' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-white border-gray-300 text-gray-700'}`} onClick={() => setAllocationMode('ticker')}>Ticker</button>
+                                        </div>
+
+                                        {(() => {
+                                            const mapCurrencyToCountry = (cur) => {
+                                                const C = (cur || '').toUpperCase();
+                                                if (C === 'DKK') return 'Danmark';
+                                                if (C === 'USD') return 'USA';
+                                                if (C === 'EUR') return 'Eurozone';
+                                                if (C === 'GBP') return 'Storbritannien';
+                                                if (C === 'SEK') return 'Sverige';
+                                                if (C === 'NOK') return 'Norge';
+                                                return C || 'Ukendt';
+                                            };
+
+                                            // Build allocation map
+                                            const alloc = new Map();
+                                            let total = 0;
+                                            Object.values(calc.portfolio).forEach(p => {
+                                                if (Math.abs(p.qty) < 0.01) return;
+                                                const val = getPositionValue(p);
+                                                total += val;
+                                                let key = '';
+                                                if (allocationMode === 'currency') key = p.cur || 'DKK';
+                                                else if (allocationMode === 'country') key = mapCurrencyToCountry(p.cur);
+                                                else key = p.ticker;
+                                                alloc.set(key, (alloc.get(key) || 0) + val);
+                                            });
+
+                                            const items = Array.from(alloc.entries()).map(([label, val]) => ({ label, val })).sort((a, b) => b.val - a.val);
+
+                                            if (items.length === 0) {
+                                                return <div className="text-center text-gray-400 italic py-8">Ingen aktive beholdninger.</div>;
+                                            }
+
+                                            return (
+                                                <div className="space-y-3">
+                                                    {items.map((it, i) => {
+                                                        const pct = total > 0 ? (it.val / total) * 100 : 0;
+                                                        return (
+                                                            <div key={i} className="space-y-1">
+                                                                <div className="flex justify-between text-sm">
+                                                                    <span className="text-gray-700 font-medium">{it.label}</span>
+                                                                    <span className="font-mono text-gray-900">{formatCurrencyNoDecimals(it.val)} ({pct.toFixed(1)}%)</span>
+                                                                </div>
+                                                                <div className="h-2 bg-gray-100 rounded overflow-hidden">
+                                                                    <div className="h-full bg-blue-500" style={{ width: `${pct.toFixed(1)}%` }}></div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            </ModalPortal>
+                        )}
+
                         {/* --- NEW: LIQUIDATION MODAL (Using Structured Breakdown) --- */}
                         {showLiquidationModal && (
-                            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowLiquidationModal(false)}>
+                            <ModalPortal onBackdropClick={() => setShowLiquidationModal(false)}>
                                 <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                                     <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                                         <h3 className="font-bold text-gray-800 flex items-center gap-2">
@@ -2220,12 +2414,12 @@
                                         </div>
                                     </div>
                                 </div>
-                            </div>
+                            </ModalPortal>
                         )}
 
                         {/* --- BREAKDOWN MODAL --- */}
                         {showGainModal && (
-                            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowGainModal(false)}>
+                            <ModalPortal onBackdropClick={() => setShowGainModal(false)}>
                                 <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
                                     <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                                         <h3 className="font-bold text-gray-800 flex items-center gap-2">
@@ -2262,13 +2456,13 @@
                                         </div>
                                     </div>
                                 </div>
-                            </div>
+                            </ModalPortal>
                         )}
 
                         {/* 1. TOP CARDS */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-6">
                             {/* Value */}
-                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group" onClick={() => setShowAllocationModal(true)}>
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
                                     <i className="ph ph-wallet"></i>Værdi
                                 </div>
@@ -2279,7 +2473,7 @@
                             {/* Liquidation */}
                             <div
                                 onClick={() => setShowLiquidationModal(true)}
-                                className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-emerald-50/50 hover:border-emerald-200 transition-all group"
+                                className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group"
                             >
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
                                     <i className="ph ph-bank"></i>Værdi efter skat
@@ -2288,15 +2482,12 @@
                                     <div className="text-3xl font-bold text-gray-900 tracking-tight break-words">
                                         {formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}
                                     </div>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity text-emerald-600 mb-1">
-                                        <i className="ph ph-list-magnifying-glass text-xl"></i>
-                                    </div>
                                 </div>
                             </div>
                             {/* All Time Gain */}
                             <div
                                 onClick={() => setShowGainModal(true)}
-                                className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-gray-50 hover:border-blue-300 transition-all group relative"
+                                className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group relative"
                             >
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
                                     <i className="ph ph-trend-up"></i>Samlet gevinst
@@ -2305,13 +2496,76 @@
                                     <div className={`text-3xl font-bold tracking-tight ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'} break-words`} style={{ wordBreak: 'break-word' }}>
                                         {formatCurrencyNoDecimals(allTimeGain)}
                                     </div>
-                                    <div className="opacity-0 group-hover:opacity-100 transition-opacity text-blue-500 mb-1">
-                                        <i className="ph ph-info text-xl"></i>
-                                    </div>
                                 </div>
                             </div>
                             {/* Today's Increase */}
-                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0">
+                            <div className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between min-w-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group" onClick={() => setShowMoversModal(true)}>
+                                {/* --- MOVERS MODAL --- */}
+                                {showMoversModal && (
+                                    <ModalPortal onBackdropClick={() => setShowMoversModal(false)}>
+                                        <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                                            <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                                                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                                    <i className="ph ph-arrow-up-right text-blue-600"></i> Top 3 Movers i dag
+                                                </h3>
+                                                <button onClick={() => setShowMoversModal(false)} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x text-lg"></i></button>
+                                            </div>
+                                            <div className="p-4 space-y-3">
+                                                {(() => {
+                                                    if (!calc.portfolio || !marketData) return <div className="text-center text-gray-400 italic py-8">Ingen aktive bevægelser i dag.</div>;
+                                                    const now = new Date();
+                                                    // Merge tickers from different accounts by summing their values
+                                                    const tickerMap = {};
+                                                    Object.values(calc.portfolio).forEach(p => {
+                                                        const m = marketData[p.ticker] || {};
+                                                        const lastTrade = new Date((m.lastTradeTime || 0) * 1000);
+                                                        const isToday = lastTrade.getDate() === now.getDate() &&
+                                                            lastTrade.getMonth() === now.getMonth() &&
+                                                            lastTrade.getFullYear() === now.getFullYear();
+                                                        if (!isToday) return;
+                                                        const { val, prevVal, price, prevClose, fxRate } = getPositionValueWithPrev(p);
+                                                        const absMove = val - prevVal;
+                                                        const pctMove = prevVal > 0 ? (absMove / prevVal) * 100 : 0;
+                                                        if (!tickerMap[p.ticker]) {
+                                                            tickerMap[p.ticker] = {
+                                                                ticker: p.ticker,
+                                                                absMove: 0,
+                                                                val: 0,
+                                                                prevVal: 0,
+                                                                price,
+                                                                prevClose,
+                                                                fxRate,
+                                                                totalPctMove: 0,
+                                                                totalPrevVal: 0
+                                                            };
+                                                        }
+                                                        tickerMap[p.ticker].absMove += absMove;
+                                                        tickerMap[p.ticker].val += val;
+                                                        tickerMap[p.ticker].prevVal += prevVal;
+                                                        tickerMap[p.ticker].totalPrevVal += prevVal;
+                                                    });
+                                                    // Calculate pctMove for each merged ticker
+                                                    Object.values(tickerMap).forEach(t => {
+                                                        t.pctMove = t.totalPrevVal > 0 ? (t.absMove / t.totalPrevVal) * 100 : 0;
+                                                    });
+                                                    const movers = Object.values(tickerMap)
+                                                        .sort((a, b) => Math.abs(b.absMove) - Math.abs(a.absMove))
+                                                        .slice(0, 3);
+                                                    if (movers.length === 0) return <div className="text-center text-gray-400 italic py-8">Ingen aktive bevægelser i dag.</div>;
+                                                    return movers.map(m => (
+                                                        <div key={m.ticker} className="flex justify-between items-center border-b last:border-0 border-gray-100 py-2">
+                                                            <div className="flex flex-col">
+                                                                <span className="font-bold text-gray-800 text-lg">{m.ticker}</span>
+                                                                <span className="text-xs text-gray-500">{formatCurrencyNoDecimals(m.absMove)} ({m.pctMove >= 0 ? '+' : ''}{m.pctMove.toFixed(2)}%)</span>
+                                                            </div>
+                                                            <div className={`font-mono font-bold text-right ${m.absMove >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(m.absMove)}</div>
+                                                        </div>
+                                                    ));
+                                                })()}
+                                            </div>
+                                        </div>
+                                    </ModalPortal>
+                                )}
                                 <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1">
                                     <i className="ph ph-arrow-up-right"></i>Gevinst/Tab i dag
                                 </div>
@@ -2338,13 +2592,7 @@
                                                 // 2. Only calculate if active today (or if we have no data, skip)
                                                 if (isToday) {
                                                     activeCount++;
-                                                    const price = m.price || 0;
-                                                    const prevClose = m.previousClose || price;
-                                                    const fxM = marketData[`${p.cur}DKK=X`];
-                                                    const fxRate = fxM?.price || 1;
-
-                                                    const val = p.qty * price * fxRate;
-                                                    const prevVal = p.qty * prevClose * fxRate;
+                                                    const { val, prevVal } = getPositionValueWithPrev(p);
 
                                                     totalVal += val;
                                                     totalPrevVal += prevVal;
@@ -2407,6 +2655,55 @@
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                             {/* LEFT: GRAPHS */}
                             <div className="lg:col-span-2 space-y-8">
+                                {/* GROWTH GRAPH */}
+                                <div className="bg-white p-4 rounded-xl border shadow-sm">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-gray-800 text-sm uppercase">Afkast (%)</h3>
+                                        <RangeSelector />
+                                    </div>
+                                    <div className="h-64 w-full">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            {/* Use numericGrowthData */}
+                                            <AreaChart data={numericGrowthData}>
+                                                <defs>
+                                                    <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
+                                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                                    </linearGradient>
+                                                </defs>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+
+                                                {/* XAXIS */}
+                                                <XAxis
+                                                    dataKey="date"
+                                                    type="number"
+                                                    domain={['dataMin', 'dataMax']}
+                                                    tickFormatter={formatAxisDateNumeric}
+                                                    ticks={graphRange === 'ALL' ? numericYearTicks : null}
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
+                                                    minTickGap={30}
+                                                />
+
+                                                <YAxis width={45} axisLine={false} tickLine={false} tickFormatter={(v) => `${v.toFixed(0)}%`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
+
+                                                {/* TOOLTIP */}
+                                                <Tooltip formatter={(v) => `${v.toFixed(2)}%`} labelFormatter={formatAxisDateNumeric} />
+
+                                                <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
+
+                                                {/* REFERENCE LINES */}
+                                                {showYearLines && numericYearTicks.map(timestamp => (
+                                                    <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
+                                                ))}
+
+                                                <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowth)" isAnimationActive={false} />
+                                            </AreaChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </div>
+
                                 {/* VALUE GRAPH */}
                                 <div className="bg-white p-4 rounded-xl border shadow-sm">
                                     <div className="flex justify-between items-center mb-4">
@@ -2462,54 +2759,7 @@
                                     </div>
                                 </div>
 
-                                {/* GROWTH GRAPH */}
-                                <div className="bg-white p-4 rounded-xl border shadow-sm">
-                                    <div className="flex justify-between items-center mb-4">
-                                        <h3 className="font-bold text-gray-800 text-sm uppercase">Tidsvægtet Afkast (%)</h3>
-                                        <RangeSelector />
-                                    </div>
-                                    <div className="h-64 w-full">
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            {/* Use numericGrowthData */}
-                                            <AreaChart data={numericGrowthData}>
-                                                <defs>
-                                                    <linearGradient id="colorGrowth" x1="0" y1="0" x2="0" y2="1">
-                                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
-                                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                                                    </linearGradient>
-                                                </defs>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
 
-                                                {/* XAXIS */}
-                                                <XAxis
-                                                    dataKey="date"
-                                                    type="number"
-                                                    domain={['dataMin', 'dataMax']}
-                                                    tickFormatter={formatAxisDateNumeric}
-                                                    ticks={graphRange === 'ALL' ? numericYearTicks : null}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                                                    minTickGap={30}
-                                                />
-
-                                                <YAxis width={45} axisLine={false} tickLine={false} tickFormatter={(v) => `${v.toFixed(0)}%`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
-
-                                                {/* TOOLTIP */}
-                                                <Tooltip formatter={(v) => `${v.toFixed(2)}%`} labelFormatter={formatAxisDateNumeric} />
-
-                                                <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
-
-                                                {/* REFERENCE LINES */}
-                                                {showYearLines && numericYearTicks.map(timestamp => (
-                                                    <ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />
-                                                ))}
-
-                                                <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} fill="url(#colorGrowth)" isAnimationActive={false} />
-                                            </AreaChart>
-                                        </ResponsiveContainer>
-                                    </div>
-                                </div>
                             </div>
                             {/* RIGHT: STATS TABLE (only on large screens) */}
                             <div className="hidden lg:block">
@@ -3336,6 +3586,16 @@ Proceed?`;
             return (
                 <div className="flex h-screen w-full bg-white relative font-sans text-gray-800">
 
+                    {/* Anonymity Blur Overlay */}
+                    {settings.anonymityBlur && blurActive && (
+                        <div className="anonymity-blur-overlay">
+                            <div className="anonymity-blur-icon" title="Klik for at vise" onClick={() => setBlurActive(false)}>
+                                <i className="ph ph-eye-slash"></i>
+                                <span>Vis indhold</span>
+                            </div>
+                        </div>
+                    )}
+
                     {/* SETTINGS MODAL */}
                     {showSettings && (
                         <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -3352,9 +3612,16 @@ Proceed?`;
                                         <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
                                     </label>
                                 </div>
+                                {/* Anonymity Blur Toggle */}
+                                <div className="flex items-center gap-2 pt-2">
+                                    <input id="anonymity-blur-toggle" type="checkbox" className="accent-blue-600" checked={!!settings.anonymityBlur} onChange={e => setSettings(s => ({ ...s, anonymityBlur: e.target.checked }))} />
+                                    <label htmlFor="anonymity-blur-toggle" className="text-sm text-gray-700 cursor-pointer select-none">
+                                        Slør app ved tab af fokus (anonymitet)
+                                    </label>
+                                </div>
                                 <div className="flex gap-2">
-                                    <button onClick={() => { localStorage.setItem('gh_config', JSON.stringify(ghConfig)); setShowSettings(false); loadFromGithub(); }} className="flex-1 bg-blue-600 text-white py-2 rounded font-medium">Gem & Forbind</button>
-                                    <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-gray-500">Annuller</button>
+                                    <button onClick={() => { localStorage.setItem('gh_config', JSON.stringify(ghConfig)); setShowSettings(false); loadFromGithub(); }} className="flex-1 bg-blue-600 text-white py-2 rounded font-medium">Ok</button>
+                                    <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-gray-500">Luk</button>
                                 </div>
                             </div>
                         </div>
