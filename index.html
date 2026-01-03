@@ -1489,10 +1489,10 @@
 
                 // NEW: Structured Breakdown for the Modal
                 const taxBreakdown = [
-                    { label: 'Betalt Udbytteskat', val: taxStats.divWithheld, icon: 'ph-coins', color: 'text-green-600', bg: 'bg-green-50' },
-                    { label: 'Betalt Skat', val: Math.max(0, taxStats.normalTaxBill - taxStats.divWithheld), icon: 'ph-receipt', color: 'text-blue-600', bg: 'bg-blue-50' },
-                    { label: 'Betalt ASK Skat', val: taxStats.askTaxBill, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50' },
-                    { label: 'Urealiseret (Ved salg nu)', val: currentTax, icon: 'ph-magic-wand', color: 'text-purple-600', bg: 'bg-purple-50', italic: true }
+                    { label: 'Skat betalt af udbytte', val: taxStats.divWithheld, icon: 'ph-coins', color: 'text-green-600', bg: 'bg-green-50' },
+                    { label: 'Skat af aktigevinster', val: Math.max(0, taxStats.normalTaxBill - taxStats.divWithheld), icon: 'ph-receipt', color: 'text-blue-600', bg: 'bg-blue-50' },
+                    { label: 'ASK Skat', val: taxStats.askTaxBill, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50' },
+                    { label: 'Urealiserede gevinster', val: currentTax, icon: 'ph-magic-wand', color: 'text-purple-600', bg: 'bg-purple-50', italic: true }
                 ];
 
                 const liquidation = {
