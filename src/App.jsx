@@ -20,6 +20,7 @@ import {
     determineType, normalizeCurrency, normalizeCsvRow, normalizeAllRows,
     validateData, rowsToTransactions, utf8_to_b64, b64_to_utf8
 } from './utils';
+import usePortfolioEngine from './hooks/usePortfolioEngine';
 
 function App() {
     const [lastUpdate, setLastUpdate] = useState(null);
@@ -52,6 +53,21 @@ function App() {
     const [statusMsg, setStatusMsg] = useState('');
     const [fileSha, setFileSha] = useState(null);
     const [schemaErrors, setSchemaErrors] = useState([]);
+
+    // Restore persisted GitHub settings
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('gh_config');
+            if (saved) setGhConfig(JSON.parse(saved));
+        } catch {}
+    }, []);
+
+    // Persist settings (including anonymityBlur) to localStorage on change
+    useEffect(() => {
+        try {
+            localStorage.setItem('portfolio_settings', JSON.stringify(settings));
+        } catch {}
+    }, [settings]);
 
     const [filters, setFilters] = useState({});
     const [splitParams, setSplitParams] = useState({ ticker: '', num: 2, den: 1, dateIso: '', startDateIso: '', endDateIso: '' });
@@ -96,6 +112,7 @@ function App() {
         return (fxM.price ?? fxM.previousClose ?? 1);
     };
 
+    // Position value helpers (restored)
     const getPositionValue = (p) => {
         if (!p || Math.abs(p.qty) < 0.01) return 0;
         const m = marketData[p.ticker] || {};
@@ -118,14 +135,8 @@ function App() {
         return { val, prevVal, price, prevClose, fxRate };
     };
 
+    // Anonymity blur state (restored)
     const [blurActive, setBlurActive] = useState(false);
-
-    useEffect(() => {
-        try {
-            localStorage.setItem('portfolio_settings', JSON.stringify(settings));
-        } catch { }
-    }, [settings]);
-
     useEffect(() => {
         if (!settings.anonymityBlur) return;
         const onBlur = () => setBlurActive(true);
@@ -134,651 +145,108 @@ function App() {
             window.removeEventListener('blur', onBlur);
         };
     }, [settings.anonymityBlur]);
-
     useEffect(() => {
         if (settings.anonymityBlur && document.hasFocus() === false) setBlurActive(true);
     }, [settings.anonymityBlur]);
-
-    useEffect(() => {
-        const saved = localStorage.getItem('gh_config');
-        if (saved) setGhConfig(JSON.parse(saved));
-    }, []);
-
-    useEffect(() => {
-        if (ghConfig.token && ghConfig.repo && rows.length === 0) loadFromGithub();
-    }, [ghConfig]);
-
-    useEffect(() => {
-        try {
-            localStorage.setItem('marketDataCache', JSON.stringify(marketData));
-        } catch (e) {
-            console.warn("Storage full: Could not cache market data.", e);
-        }
-    }, [marketData]);
-
+    // Derived data used by the calculation engine
     const txs = useMemo(() => rowsToTransactions(rows), [rows]);
     const uniqueTickers = useMemo(() => [...new Set(txs.map(t => t.ticker).filter(t => t && !['DKK', 'USD', 'EUR', 'GBP', 'SEK', 'NOK'].includes(t)))], [txs]);
     const accounts = useMemo(() => [...new Set(rows.map(r => r['Account']).filter(Boolean))].sort(), [rows]);
     const years = useMemo(() => {
         const yr = new Set(txs.map(t => t.date.getFullYear().toString()));
-        yr.add(new Date().getFullYear().toString()); 
-        return [...yr].sort().reverse(); 
+        yr.add(new Date().getFullYear().toString());
+        return [...yr].sort().reverse();
     }, [txs]);
 
+    // Market data fetcher (restored)
     const fetchMarketData = async (silent = false) => {
-        if (!silent) setLoading(true);
-
-        const now = Math.floor(Date.now() / 1000);
-        let globalStart = now - (2 * 365 * 24 * 60 * 60); 
-        if (txs.length > 0) {
-            const firstTx = txs[0].date.getTime() / 1000;
-            globalStart = firstTx - (30 * 24 * 60 * 60); 
-        }
-
-        const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
-        const bench = settings.benchmarkTicker ? [settings.benchmarkTicker] : [];
-        const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...bench];
-
-        if (allTickers.length === 0) {
-            if (!silent) setLoading(false);
-            return;
-        }
-
-        const newMData = { ...marketData };
-
-        await Promise.all(allTickers.map(async (ticker) => {
-            try {
-                let myStart = globalStart;
-                if (uniqueTickers.includes(ticker)) {
-                    const firstTx = txs.find(t => t.ticker === ticker);
-                    if (firstTx) {
-                        myStart = (firstTx.date.getTime() / 1000) - (30 * 24 * 60 * 60);
-                    }
-                }
-                const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${now}&interval=1d&events=div`;
-                const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
-                const json = await res.json();
-
-                if (json.chart?.result) {
-                    const result = json.chart.result[0];
-                    const meta = result.meta;
-                    const quotes = result.indicators.quote[0];
-                    const dates = result.timestamp;
-
-                    const cleanHistory = dates.map((t, i) => ({
-                        date: new Date(t * 1000).toISOString().split('T')[0],
-                        close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
-                    })).filter(x => x.close != null);
-
-                    const livePrice = meta.regularMarketPrice;
-                    let prevClose = livePrice;
-
-                    if (cleanHistory.length >= 2) {
-                        const lastCandle = cleanHistory[cleanHistory.length - 1];
-                        const secondLastCandle = cleanHistory[cleanHistory.length - 2];
-                        const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
-                        if (isLastCandleToday) prevClose = secondLastCandle.close;
-                        else prevClose = lastCandle.close;
-                    } else if (cleanHistory.length === 1) {
-                        prevClose = cleanHistory[0].close;
-                    }
-
-                    newMData[ticker] = {
-                        ...newMData[ticker],
-                        history: cleanHistory,
-                        currency: meta.currency,
-                        price: livePrice,
-                        previousClose: prevClose,
-                        lastTradeTime: meta.regularMarketTime,
-                        lastUpdated: Date.now()
-                    };
-                }
-            } catch (e) { console.warn("Fetch failed", ticker); }
-        }));
-
-        setMarketData(newMData);
-        setLastUpdate(new Date());
-
         try {
-            localStorage.setItem('marketDataCache', JSON.stringify(newMData));
-        } catch (e) {
-            console.warn("Storage full", e);
+            if (!silent) setLoading(true);
+
+            const now = Math.floor(Date.now() / 1000);
+            let globalStart = now - (2 * 365 * 24 * 60 * 60);
+            if (txs.length > 0) {
+                const firstTx = txs[0].date.getTime() / 1000;
+                globalStart = firstTx - (30 * 24 * 60 * 60);
+            }
+
+            const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
+            const bench = settings.benchmarkTicker ? [settings.benchmarkTicker] : [];
+            const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...bench];
+
+            if (allTickers.length === 0) {
+                if (!silent) setLoading(false);
+                return;
+            }
+
+            const newMData = { ...marketData };
+
+            await Promise.all(allTickers.map(async (ticker) => {
+                try {
+                    let myStart = globalStart;
+                    if (uniqueTickers.includes(ticker)) {
+                        const firstTxForTicker = txs.find(t => t.ticker === ticker);
+                        if (firstTxForTicker) {
+                            myStart = (firstTxForTicker.date.getTime() / 1000) - (30 * 24 * 60 * 60);
+                        }
+                    }
+                    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${now}&interval=1d&events=div`;
+                    const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
+                    const json = await res.json();
+
+                    if (json.chart?.result) {
+                        const result = json.chart.result[0];
+                        const meta = result.meta;
+                        const quotes = result.indicators.quote[0];
+                        const dates = result.timestamp;
+
+                        const cleanHistory = dates.map((t, i) => ({
+                            date: new Date(t * 1000).toISOString().split('T')[0],
+                            close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
+                        })).filter(x => x.close != null);
+
+                        const livePrice = meta.regularMarketPrice;
+                        let prevClose = livePrice;
+
+                        if (cleanHistory.length >= 2) {
+                            const lastCandle = cleanHistory[cleanHistory.length - 1];
+                            const secondLastCandle = cleanHistory[cleanHistory.length - 2];
+                            const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
+                            prevClose = isLastCandleToday ? secondLastCandle.close : lastCandle.close;
+                        } else if (cleanHistory.length === 1) {
+                            prevClose = cleanHistory[0].close;
+                        }
+
+                        newMData[ticker] = {
+                            ...newMData[ticker],
+                            history: cleanHistory,
+                            currency: meta.currency,
+                            price: livePrice,
+                            previousClose: prevClose,
+                            lastTradeTime: meta.regularMarketTime,
+                            lastUpdated: Date.now()
+                        };
+                    }
+                } catch (e) {
+                    console.warn('Fetch failed', ticker, e);
+                }
+            }));
+
+            setMarketData(newMData);
+            setLastUpdate(new Date());
+
+            try {
+                localStorage.setItem('marketDataCache', JSON.stringify(newMData));
+            } catch (e) {
+                console.warn('Storage full', e);
+            }
+        } finally {
+            if (!silent) setLoading(false);
         }
-        if (!silent) setLoading(false);
     };
 
-    useEffect(() => {
-        if (uniqueTickers.length > 0 && !lastUpdate) {
-            fetchMarketData(false); 
-        }
-    }, [uniqueTickers.length]); 
-
-    useEffect(() => {
-        let interval;
-        if (view === 'holdings') {
-            if (lastUpdate && (Date.now() - lastUpdate.getTime() > 60000)) {
-                fetchMarketData(true);
-            }
-            interval = setInterval(() => {
-                fetchMarketData(true); 
-            }, 60000);
-        }
-        return () => clearInterval(interval);
-    }, [view, lastUpdate]);
-
-    const calc = useMemo(() => {
-        let portfolio = {};
-        let totalValueGraph = [];
-        let growthGraphData = [];
-        const executionWarnings = [];
-        const globalStockState = {};
-        const yearIndex = {};
-        const etfKeys = new Set();
-        const askKeys = new Set();
-        const keyInfo = {};
-        const currencyMap = {};
-
-        const getTaxLimit = (year) => {
-            if (TAX_LIMITS[year]) return TAX_LIMITS[year];
-            executionWarnings.push(`CRITICAL: Missing Tax Limit for year ${year}.`);
-            return 0;
-        };
-
-        const getPrice = (t, dStr) => {
-            const m = marketData[t];
-            if (m?.history?.length) {
-                const hit = m.history.find(h => h.date === dStr);
-                if (hit) return hit.close;
-                const prev = m.history.filter(h => h.date < dStr);
-                if (prev.length) return prev[prev.length - 1].close;
-            }
-            for (let i = txs.length - 1; i >= 0; i--) {
-                const tx = txs[i];
-                if (tx.ticker === t) {
-                    const txDate = getLocalISO(tx.date);
-                    if (txDate <= dStr) return tx.price;
-                }
-            }
-            return 0;
-        };
-
-        const getFx = (c, dStr) => {
-            if (!c || c === 'DKK') return 1;
-            const rate = getPrice(`${c}DKK=X`, dStr);
-            if (rate === 0) {
-                executionWarnings.push(`CRITICAL: Missing FX Rate for ${c} on ${dStr}.`);
-                return 1;
-            }
-            return rate;
-        };
-
-        const reports = {};
-        const reportTemplate = () => ({
-            rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0,
-            withheldTax: 0, askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0,
-            totalNormalTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
-            utilizedLossNormal: 0, carriedLossNormal: 0,
-            utilizedLossAsk: 0, carriedLossAsk: 0
-        });
-        years.forEach(y => reports[y] = reportTemplate());
-
-        const addToIndex = (y, key, tx) => {
-            if (!yearIndex[y]) yearIndex[y] = {};
-            if (!yearIndex[y][key]) yearIndex[y][key] = [];
-            yearIndex[y][key].push(tx);
-        };
-
-        txs.forEach(tx => {
-            const y = tx.date.getFullYear().toString();
-            if (!reports[y]) reports[y] = reportTemplate();
-
-            const key = `${tx.ticker}_${tx.account}`;
-            const globalTickerKey = tx.ticker;
-            const isASK = tx.account === config.askAccount;
-            const isAssetETF = tx.assetType === 'ETF';
-
-            if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
-                addToIndex(y, key, tx);
-                if (!keyInfo[key]) {
-                    keyInfo[key] = {
-                        ticker: tx.ticker, account: tx.account, cur: tx.currency,
-                        type: isAssetETF ? 'ETF' : 'Stock',
-                        isInventory: isASK || isAssetETF
-                    };
-                    if (tx.currency) currencyMap[key] = tx.currency;
-                    if (isASK) askKeys.add(key);
-                    if (isAssetETF && !isASK) etfKeys.add(key);
-                }
-            }
-
-            if (!portfolio[key]) portfolio[key] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency };
-            const pos = portfolio[key];
-
-            if (!isASK && !isAssetETF && !globalStockState[globalTickerKey]) {
-                globalStockState[globalTickerKey] = { totalQty: 0, totalCostDKK: 0, avgPriceDKK: 0 };
-            }
-            const glob = globalStockState[globalTickerKey];
-
-            const dStr = getLocalISO(tx.date);
-            const accCur = config.currencies[tx.account] || 'DKK';
-            const accFx = getFx(accCur, dStr);
-            const valDKK = Math.abs(tx.qty) * tx.price * tx.fxRate;
-            const commissionDKK = tx.commission * accFx;
-            const taxDKK = tx.tax * accFx;
-
-            if (tx.type === 'DIVIDEND') {
-                const amtDKK = tx.qty * (tx.price ?? 1) * tx.fxRate;
-                if (isASK) reports[y].askGain += amtDKK;
-                else {
-                    if (tx.currency === 'DKK') reports[y].rubrik61 += amtDKK;
-                    else reports[y].rubrik63 += amtDKK;
-                    reports[y].withheldTax += (taxDKK || 0);
-                    reports[y].breakdown.dividends.push({ date: dStr, ticker: tx.ticker, account: tx.account, amount: amtDKK, withheldTax: taxDKK || 0 });
-                }
-            }
-            else if (tx.qty < 0 && (tx.assetType === 'Cash' || tx.type === 'TRANSFER' || !tx.ticker)) {
-                const note = (tx.raw['Note'] || '').toLowerCase();
-                const yearMatch = note.match(/(?:skat|tax).*?(\d{4})/);
-                if (yearMatch) {
-                    const targetYear = yearMatch[1];
-                    if (reports[targetYear]) {
-                        const amount = Math.abs(tx.qty * tx.fxRate);
-                        if (tx.account === config.askAccount || note.includes('ask')) reports[targetYear].paidAskTax += amount;
-                        else reports[targetYear].paidTax += amount;
-                    }
-                }
-            }
-            else if (tx.type === 'BUY') {
-                pos.qty += tx.qty;
-                const totalCostDKK = valDKK + commissionDKK;
-
-                if (isASK || isAssetETF) {
-                    pos.cost += totalCostDKK;
-                    pos.avg = pos.qty ? pos.cost / pos.qty : 0;
-                } else {
-                    glob.totalQty += tx.qty;
-                    glob.totalCostDKK += totalCostDKK;
-                    glob.avgPriceDKK = glob.totalQty ? glob.totalCostDKK / glob.totalQty : 0;
-                }
-            }
-            else if (tx.type === 'SELL') {
-                const proceeds = valDKK - commissionDKK;
-                const sellQty = Math.abs(tx.qty);
-                pos.qty -= sellQty;
-
-                if (isASK || isAssetETF) {
-                    pos.cost -= (sellQty * pos.avg);
-                } else {
-                    const costBasis = sellQty * glob.avgPriceDKK;
-                    const gain = proceeds - costBasis;
-                    glob.totalQty -= sellQty;
-                    glob.totalCostDKK -= costBasis;
-                    reports[y].rubrik66 += gain;
-                    reports[y].breakdown.stocks.push({ date: dStr, ticker: tx.ticker, account: tx.account, qty: sellQty, gain, costBasis, proceeds });
-                }
-            }
-        });
-
-        Object.values(portfolio).forEach(p => {
-            const pKey = `${p.ticker}_${p.acc}`;
-            if (!keyInfo[pKey]?.isInventory && globalStockState[p.ticker]) {
-                p.avg = globalStockState[p.ticker].avgPriceDKK;
-                p.cost = p.qty * p.avg;
-            }
-        });
-
-        const allYearsSorted = [...years].sort();
-        const allInventoryKeys = new Set([...etfKeys, ...askKeys]);
-        const runningQtyMap = {};
-        allInventoryKeys.forEach(k => runningQtyMap[k] = 0);
-
-        allYearsSorted.forEach(y => {
-            const primoDate = `${y}-01-01`;
-            const ultimoDate = `${y}-12-31`;
-
-            allInventoryKeys.forEach(key => {
-                const { ticker, account } = keyInfo[key];
-                const cur = currencyMap[key] || 'DKK';
-                const isAccountASK = account === config.askAccount;
-
-                const startQty = runningQtyMap[key];
-                const pricePrimo = getPrice(ticker, primoDate);
-                const fxPrimo = getFx(cur, primoDate);
-                const primoVal = startQty * pricePrimo * fxPrimo;
-
-                let flows = 0;
-                let yearTransactions = [];
-                const relevantTxs = (yearIndex[y] && yearIndex[y][key]) ? yearIndex[y][key] : [];
-
-                relevantTxs.forEach(tx => {
-                    runningQtyMap[key] += tx.qty;
-                    const dStr = getLocalISO(tx.date);
-                    const valRaw = Math.abs(tx.qty * tx.price * tx.fxRate);
-                    const accCur = config.currencies[tx.account] || 'DKK';
-                    const costRaw = tx.commission * getFx(accCur, dStr);
-
-                    if (tx.type === 'BUY') {
-                        flows += (valRaw + costRaw);
-                        yearTransactions.push({ date: dStr, type: 'Køb', qty: Math.abs(tx.qty), amount: valRaw + costRaw });
-                    } else if (tx.type === 'SELL') {
-                        flows -= (valRaw - costRaw);
-                        yearTransactions.push({ date: dStr, type: 'Salg', qty: Math.abs(tx.qty), amount: valRaw - costRaw });
-                    }
-                });
-
-                const endQty = runningQtyMap[key];
-                const priceUltimo = getPrice(ticker, ultimoDate);
-                const fxUltimo = getFx(cur, ultimoDate);
-                const ultimoVal = endQty * priceUltimo * fxUltimo;
-
-                const gain = ultimoVal - primoVal - flows;
-
-                if (primoVal !== 0 || ultimoVal !== 0 || flows !== 0) {
-                    if (isAccountASK) reports[y].askGain += gain;
-                    else {
-                        reports[y].rubrik38 += gain;
-                        reports[y].breakdown.etfs.push({ ticker, account, gain, primoQty: startQty, primoVal, ultimoQty: endQty, ultimoVal, netFlows: flows, transactions: yearTransactions });
-                    }
-                }
-            });
-
-            reports[y].askTax = Math.max(0, reports[y].askGain * 0.17);
-            const r = reports[y];
-            const shareIncome = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
-            const limit = getTaxLimit(y) * (settings.married ? 2 : 1);
-            reports[y].totalNormalTax = calculateDanishTax(shareIncome, limit);
-            if (r.rubrik345 > 0) reports[y].totalNormalTax += r.rubrik345 * 0.42;
-        });
-
-        let runningLossNormal = 0;
-        let runningLossAsk = 0;
-
-        allYearsSorted.forEach(y => {
-            const r = reports[y];
-            const shareIncomeRaw = r.rubrik66 + r.rubrik38 + r.rubrik61 + r.rubrik63;
-
-            if (shareIncomeRaw < 0) {
-                runningLossNormal += Math.abs(shareIncomeRaw);
-                r.carriedLossNormal = runningLossNormal;
-            } else {
-                if (runningLossNormal > 0) {
-                    const used = Math.min(runningLossNormal, shareIncomeRaw);
-                    r.utilizedLossNormal = used;
-                    runningLossNormal -= used;
-                }
-                r.carriedLossNormal = runningLossNormal;
-            }
-
-            if (r.askGain < 0) {
-                runningLossAsk += Math.abs(r.askGain);
-                r.carriedLossAsk = runningLossAsk;
-            } else {
-                if (runningLossAsk > 0) {
-                    const used = Math.min(runningLossAsk, r.askGain);
-                    r.utilizedLossAsk = used;
-                    runningLossAsk -= used;
-                }
-                r.carriedLossAsk = runningLossAsk;
-            }
-
-            const taxableShareIncome = Math.max(0, shareIncomeRaw - r.utilizedLossNormal);
-            const limit = getTaxLimit(y) * (settings.married ? 2 : 1);
-            r.totalNormalTax = calculateDanishTax(taxableShareIncome, limit);
-            if (r.rubrik345 > 0) r.totalNormalTax += r.rubrik345 * 0.42;
-
-            const taxableAsk = Math.max(0, r.askGain - r.utilizedLossAsk);
-            r.askTax = taxableAsk * 0.17;
-        });
-
-        let currentVal = 0;
-        let costBasisTotal = 0;
-        let unrealizedRubrik66Gain = 0;
-        const todayStr = getLocalISO(new Date());
-        const currentYear = new Date().getFullYear().toString();
-
-        Object.values(portfolio).forEach(p => {
-            if (Math.abs(p.qty) < 0.01) return;
-            const price = getPrice(p.ticker, todayStr);
-            const fx = getFx(p.cur, todayStr);
-            const val = p.qty * price * fx;
-            currentVal += val;
-            costBasisTotal += (p.qty * p.avg);
-
-            const pKey = `${p.ticker}_${p.acc}`;
-            if (!keyInfo[pKey]?.isInventory) {
-                unrealizedRubrik66Gain += (val - (p.qty * p.avg));
-            }
-        });
-
-        const ytd = reports[currentYear] || reportTemplate();
-        const liqAskGain = Math.max(0, (ytd.askGain || 0));
-        const liquidationAskTax = Math.max(0, (Math.max(0, liqAskGain - (ytd.utilizedLossAsk || 0)) * 0.17) - (ytd.paidAskTax || 0));
-
-        const totalRealizedYTD = (ytd.rubrik66 || 0) + (ytd.rubrik38 || 0) + (ytd.rubrik61 || 0) + (ytd.rubrik63 || 0);
-        const hypoTotalIncome = totalRealizedYTD + unrealizedRubrik66Gain;
-        const availableLoss = reports[parseInt(currentYear) - 1]?.carriedLossNormal || 0;
-        const hypoTaxable = Math.max(0, hypoTotalIncome - availableLoss);
-        const limit = getTaxLimit(currentYear) * (settings.married ? 2 : 1);
-
-        let hypoTaxBill = calculateDanishTax(hypoTaxable, limit);
-        hypoTaxBill += ((ytd.rubrik345 || 0) * 0.42);
-
-        const liquidationNormalTax = Math.max(0, hypoTaxBill - (ytd.totalNormalTax || 0));
-        const currentTax = liquidationAskTax + liquidationNormalTax;
-
-        let yearlyStats = [];
-        const holdingGraphsByTicker = {};
-        if (txs.length > 0) {
-            const timeTxs = [...txs].sort((a, b) => a.date - b.date);
-            let d = new Date(timeTxs[0].date);
-            const now = new Date();
-            const historyPortfolio = {};
-            let txCursor = 0;
-            let twrMultiplier = 1.0;
-            let prevDayValue = 0;
-
-            totalValueGraph.push({ date: getLocalISO(d), value: 0, invested: 0 });
-            growthGraphData.push({ date: getLocalISO(d), value: 0 });
-
-            while (d <= now) {
-                const dStr = getLocalISO(d);
-                let dayInvestedFlow = 0; 
-                const holdingDayFlow = {}; 
-
-                while (txCursor < timeTxs.length && timeTxs[txCursor].date <= d) {
-                    const tx = timeTxs[txCursor];
-                    const key = `${tx.ticker}_${tx.account}`;
-                    const accCur = config.currencies[tx.account] || 'DKK';
-                    const accFx = getFx(accCur, dStr);
-
-                    if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
-                        if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cost: 0, cur: tx.currency, ticker: tx.ticker };
-                        const p = historyPortfolio[key];
-                        const tradeValDKK = (Math.abs(tx.qty) * tx.price * tx.fxRate);
-                        const commDKK = (tx.commission * accFx);
-
-                        if (tx.type === 'BUY') {
-                            dayInvestedFlow += (tradeValDKK + commDKK);
-                            holdingDayFlow[tx.ticker] = (holdingDayFlow[tx.ticker] || 0) + (tradeValDKK + commDKK);
-                            p.qty += tx.qty;
-                            p.cost += (tradeValDKK + commDKK);
-                        } else if (tx.type === 'SELL') {
-                            dayInvestedFlow -= (tradeValDKK - commDKK);
-                            holdingDayFlow[tx.ticker] = (holdingDayFlow[tx.ticker] || 0) - (tradeValDKK - commDKK);
-                            if (p.qty > 0) {
-                                const avgCost = p.cost / p.qty;
-                                const soldQty = Math.abs(tx.qty);
-                                p.cost -= (avgCost * soldQty);
-                            }
-                            p.qty -= Math.abs(tx.qty);
-                        }
-                    } else if (tx.type === 'DIVIDEND') {
-                        const divValDKK = (tx.qty * (tx.price ?? 1) * tx.fxRate);
-                        const taxDKK = (tx.tax * accFx);
-                        dayInvestedFlow -= (divValDKK - taxDKK);
-                    }
-                    txCursor++;
-                }
-
-                let dayAssetValue = 0;
-                let dayInvestedSum = 0; 
-                const perTickerDayValue = {};
-                const perTickerInvested = {};
-
-                for (const key in historyPortfolio) {
-                    const p = historyPortfolio[key];
-                    if (Math.abs(p.qty) > 0.0001) {
-                        const price = getPrice(p.ticker, dStr);
-                        const fx = getFx(p.cur, dStr);
-                        if (price) {
-                            const posVal = (p.qty * price * fx);
-                            dayAssetValue += posVal;
-                            const tkr = p.ticker;
-                            perTickerDayValue[tkr] = (perTickerDayValue[tkr] || 0) + posVal;
-                        }
-
-                        dayInvestedSum += p.cost;
-                        const tkr2 = p.ticker;
-                        perTickerInvested[tkr2] = (perTickerInvested[tkr2] || 0) + p.cost;
-                    }
-                }
-
-                const adjustedStart = prevDayValue + (dayInvestedFlow * 0.5);
-                const dailyProfit = dayAssetValue - prevDayValue - dayInvestedFlow;
-
-                if (adjustedStart > 1) {
-                    const dailyReturn = dailyProfit / adjustedStart;
-                    twrMultiplier = twrMultiplier * (1 + dailyReturn);
-                }
-
-                prevDayValue = dayAssetValue;
-
-                if (twrMultiplier !== 1 || dayAssetValue > 0) {
-                    totalValueGraph.push({ date: dStr, value: dayAssetValue, invested: dayInvestedSum });
-                    growthGraphData.push({ date: dStr, value: (twrMultiplier - 1) * 100 });
-                }
-
-                for (const tkr in perTickerDayValue) {
-                    const curVal = perTickerDayValue[tkr] || 0;
-                    const flow = holdingDayFlow[tkr] || 0;
-                    if (!holdingGraphsByTicker[tkr]) {
-                        holdingGraphsByTicker[tkr] = { twr: 1.0, prev: 0, value: [], growth: [] };
-                    }
-                    const h = holdingGraphsByTicker[tkr];
-                    const adjustedStartH = h.prev + (flow * 0.5);
-                    const dailyProfitH = curVal - h.prev - flow;
-                    if (adjustedStartH > 1) {
-                        const dailyReturnH = dailyProfitH / adjustedStartH;
-                        h.twr = h.twr * (1 + dailyReturnH);
-                    }
-                    h.prev = curVal;
-                    const inv = perTickerInvested[tkr] || 0;
-                    h.value.push({ date: dStr, value: curVal, invested: inv });
-                    h.growth.push({ date: dStr, value: (h.twr - 1) * 100 });
-                }
-                d.setDate(d.getDate() + 1);
-            }
-
-            if (totalValueGraph.length > 0) {
-                const firstYear = parseInt(totalValueGraph[0].date.slice(0, 4), 10);
-                const lastYear = parseInt(totalValueGraph[totalValueGraph.length - 1].date.slice(0, 4), 10);
-                const nearest = (target, dataset) => dataset.find(p => p.date >= target);
-
-                for (let y = lastYear; y >= firstYear; y--) {
-                    const startNode = nearest(`${y}-01-01`, growthGraphData);
-                    let endNode = nearest(`${y}-12-31`, growthGraphData);
-                    if (y === new Date().getFullYear()) endNode = growthGraphData[growthGraphData.length - 1];
-                    else if (!endNode) {
-                        const yearData = growthGraphData.filter(p => p.date.startsWith(y.toString()));
-                        if (yearData.length) endNode = yearData[yearData.length - 1];
-                    }
-                    let yearReturn = 0;
-                    if (startNode && endNode) {
-                        const startMult = 1 + (startNode.value / 100);
-                        const endMult = 1 + (endNode.value / 100);
-                        yearReturn = ((endMult / startMult) - 1) * 100;
-                    }
-
-                    let vStart = 0; let vEnd = 0;
-                    const prevYearEnd = nearest(`${y - 1}-12-31`, totalValueGraph);
-                    if (prevYearEnd) vStart = prevYearEnd.value;
-                    else {
-                        const prevYearData = totalValueGraph.filter(p => p.date.startsWith((y - 1).toString()));
-                        if (prevYearData.length) vStart = prevYearData[prevYearData.length - 1].value;
-                    }
-                    const currYearEnd = nearest(`${y}-12-31`, totalValueGraph);
-                    if (currYearEnd) vEnd = currYearEnd.value;
-                    else if (y === new Date().getFullYear()) vEnd = totalValueGraph[totalValueGraph.length - 1].value;
-
-                    let netInvested = 0;
-                    let bankFlow = 0; let flowIn = 0; let flowOut = 0;
-
-                    txs.forEach(tx => {
-                        if (tx.date.getFullYear() === y) {
-                            const accCur = config.currencies[tx.account] || 'DKK';
-                            const accFx = getFx(accCur, getLocalISO(tx.date));
-                            if (tx.type === 'BUY') netInvested += (Math.abs(tx.qty) * tx.price * tx.fxRate) + (tx.commission * accFx);
-                            else if (tx.type === 'SELL') netInvested -= ((Math.abs(tx.qty) * tx.price * tx.fxRate) - (tx.commission * accFx));
-                            else if (tx.type === 'DIVIDEND') netInvested -= ((tx.qty * (tx.price ?? 1) * tx.fxRate) - (tx.tax * accFx));
-
-                            if (tx.assetType === 'Cash' && tx.type !== 'DIVIDEND' && tx.type !== 'INTEREST') {
-                                const val = (tx.qty * tx.fxRate);
-                                bankFlow += val;
-                                if (val > 0) flowIn += val; else flowOut += val;
-                            }
-                        }
-                    });
-
-                    yearlyStats.push({
-                        year: y,
-                        return: yearReturn,
-                        flow: bankFlow,
-                        gainAbs: vEnd - vStart - netInvested,
-                        breakdown: { in: flowIn, out: flowOut }
-                    });
-                }
-            }
-        }
-
-        const historicalGain = Object.values(reports).reduce((acc, r) =>
-            acc + (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik345 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0) + (r.askGain || 0), 0
-        );
-        const allTimeGain = historicalGain + unrealizedRubrik66Gain;
-        const taxStats = Object.values(reports).reduce((acc, r) => ({
-            normalTaxBill: acc.normalTaxBill + (r.totalNormalTax || 0),
-            askTaxBill: acc.askTaxBill + (r.askTax || 0),
-            divWithheld: acc.divWithheld + (r.withheldTax || 0)
-        }), { normalTaxBill: 0, askTaxBill: 0, divWithheld: 0 });
-
-        const totalHistoricTaxCost = taxStats.normalTaxBill + taxStats.askTaxBill;
-        const totalTaxBurden = totalHistoricTaxCost + currentTax;
-        const lifetimeNetInvested = yearlyStats.reduce((sum, y) => sum + (y.flow || 0), 0);
-        const effectiveTaxRate = allTimeGain > 0 ? (totalTaxBurden / allTimeGain) * 100 : 0;
-        const taxBreakdown = [
-            { label: 'Skat betalt af udbytte', val: taxStats.divWithheld, icon: 'ph-coins', color: 'text-green-600', bg: 'bg-green-50' },
-            { label: 'Skat af aktigevinster', val: Math.max(0, taxStats.normalTaxBill - taxStats.divWithheld), icon: 'ph-receipt', color: 'text-blue-600', bg: 'bg-blue-50' },
-            { label: 'ASK Skat', val: taxStats.askTaxBill, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50' },
-            { label: 'Urealiserede gevinster', val: currentTax, icon: 'ph-magic-wand', color: 'text-purple-600', bg: 'bg-purple-50', italic: true }
-        ];
-
-        const liquidation = {
-            netResult: currentVal - currentTax,
-            allTimeGain,
-            lifetimeNetInvested,
-            totalHistoricTaxCost,
-            totalTaxBurden,
-            effectiveTaxRate,
-            taxBreakdown
-        };
-
-        return {
-            portfolio, reports, totalValueGraph, growthGraphData,
-            currentVal, currentTax, costBasisTotal, liquidation,
-            liquidationNormalTax,
-            unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats, warnings: executionWarnings,
-            holdingGraphsByTicker
-        };
-    }, [txs, marketData, settings]);
+    const calc = usePortfolioEngine(txs, marketData, settings, config, years);
+                   
 
     const splitCandidates = useMemo(() => {
         const candidates = [];
@@ -1088,7 +556,7 @@ function App() {
 
                                                     { /* Daily % (Greys out if not today) */}
                                                     <td
-                                                        className={`px-1 py-3 text-right border-b border-dotted border-gray-300 cursor-help whitespace-nowrap ${!isStockToday ? 'text-gray-400' : (dailyPct >= 0 ? 'text-green-600' : 'text-red-600')
+                                                        className={`px-1 py-3 text-right border-b border-dotted border-gray-200 cursor-help whitespace-nowrap ${!isStockToday ? 'text-gray-400' : (dailyPct >= 0 ? 'text-green-600' : 'text-red-600')
                                                             }`}
                                                         title={debugTitle}
                                                     >
@@ -1260,7 +728,7 @@ function App() {
 
                                     {/* Utilized Loss */}
                                     {r.utilizedLossNormal > 0 && (
-                                        <div className="flex justify-between items-center text-sm pt-2 text-green-700 bg-green-50 p-2 rounded border border-green-100">
+                                        <div className="flex justify-between items-center text-sm pt-2 text-green-700 bg-green-50 p-2 rounded border border-green-50">
                                             <div className="flex items-center gap-2">
                                                 <i className="ph ph-arrow-u-down-left"></i>
                                                 <span>Fradrag fra tidligere års tab</span>
@@ -1279,7 +747,7 @@ function App() {
 
                                     {/* Capital Income */}
                                     {r.rubrik345 !== 0 && (
-                                        <div className="flex justify-between items-center text-sm pt-2 mt-2 border-t border-gray-100 border-dashed">
+                                        <div className="flex justify-between items-center text-sm pt-2 mt-2 border-t border-gray-50 border-dashed">
                                             <div className="flex items-center gap-2">
                                                 <span className="bg-purple-100 text-purple-700 font-mono text-[10px] font-bold px-1.5 py-0.5 rounded text-xs">R345</span>
                                                 <span className="text-gray-600">Kapitalindkomst</span>
@@ -1290,7 +758,7 @@ function App() {
                                 </div>
 
                                 {/* 4. Summary Footer */}
-                                <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-gray-100 rounded-b-xl mt-auto">
+                                <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-gray-50 rounded-b-xl mt-auto">
                                     <div className="space-y-1 text-sm mb-3">
                                         <div className="flex justify-between text-gray-500">
                                             <span>Beregnet skat</span>
@@ -1307,7 +775,7 @@ function App() {
                                             </div>
                                         )}
                                     </div>
-                                    <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                                    <div className="flex justify-between items-center pt-2 border-t border-gray-100">
                                         <span className="font-bold text-gray-900">Restskat</span>
                                         <span className={`font-bold text-xl ${taxToPay > 0 ? 'text-blue-600' : 'text-green-600'}`}>
                                             {formatCurrencyNoDecimals(taxToPay)}
@@ -1350,7 +818,7 @@ function App() {
 
                                             {/* --- NEW: UTILIZED ASK LOSS --- */}
                                             {r.utilizedLossAsk > 0 && (
-                                                <div className="flex justify-between items-center text-sm text-green-700 bg-green-50 p-2 rounded border border-green-100">
+                                                <div className="flex justify-between items-center text-sm text-green-700 bg-green-50 p-2 rounded border border-green-50">
                                                     <div className="flex items-center gap-2">
                                                         <i className="ph ph-arrow-u-down-left"></i>
                                                         <span>Modregnet tab</span>
@@ -1373,7 +841,7 @@ function App() {
                                 </div>
 
                                 {/* Footer */}
-                                <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-teal-100 rounded-b-xl mt-auto">
+                                <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-teal-50 rounded-b-xl mt-auto">
                                     <div className="space-y-1 text-sm mb-3">
                                         <div className="flex justify-between text-gray-500">
                                             <span>Beregnet skat</span>
@@ -1386,7 +854,7 @@ function App() {
                                             </div>
                                         )}
                                     </div>
-                                    <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                                    <div className="flex justify-between items-center pt-2 border-t border-gray-100">
                                         <span className="font-bold text-teal-900">Restskat</span>
                                         <span className="font-bold text-xl text-teal-700">{formatCurrencyNoDecimals(askTaxToPay)}</span>
                                     </div>
@@ -1413,19 +881,19 @@ function App() {
 
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     {/* Tile: Sell Everything Now */}
-                                    <div className="p-4 rounded border border-gray-200 bg-white">
+                                        <div className="p-4 rounded border border-gray-50 bg-white">
                                         <div className="text-xs font-bold text-gray-500 uppercase">Ekstra Skat</div>
                                         <div className="mt-1 text-2xl font-bold text-purple-700">{formatCurrencyNoDecimals(calc.liquidationNormalTax)}</div>
                                     </div>
 
                                     {/* Tile: Optimal Liquidation (27%) */}
-                                    <div className="p-4 rounded border border-gray-200 bg-white">
+                                        <div className="p-4 rounded border border-gray-50 bg-white">
                                         <div className="text-xs font-bold text-gray-500 uppercase">Ekstra skat - ved 27%</div>
                                         <div className="mt-1 text-2xl font-bold text-blue-700">{formatCurrencyNoDecimals(optimalLiquidationTax)}</div>
                                     </div>
 
                                     {/* Tile: Years to Complete */}
-                                    <div className="p-4 rounded border border-gray-200 bg-white">
+                                        <div className="p-4 rounded border border-gray-50 bg-white">
                                         <div className="text-xs font-bold text-gray-500 uppercase">År - ved 27%</div>
                                         <div className="mt-1 text-2xl font-bold text-gray-900">{yearsToSellAll}</div>
                                     </div>
@@ -1516,7 +984,7 @@ function App() {
                                     ) : (
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             {r.breakdown.etfs.map((e, i) => (
-                                                <div key={i} className="border border-gray-200 rounded p-3 hover:bg-gray-50">
+                                                <div key={i} className="border border-gray-100 rounded p-3 hover:bg-gray-50">
                                                     <div className="flex justify-between items-center mb-2">
                                                         <span className="font-bold text-gray-900 text-sm">{e.ticker} <span className="font-normal text-gray-400 text-xs">({e.account})</span></span>
                                                         <span className={`font-mono font-bold text-sm ${e.gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(e.gain)}</span>
@@ -1729,7 +1197,7 @@ function App() {
                     // Only show '1M', 'ALL' (as 'altid'), and years
                     const baseRanges = ['1M', 'ALL'];
                     const options = graphRange === 'CUSTOM' ? ['CUSTOM', ...baseRanges, ...years] : [...baseRanges, ...years];
-                    const dropdownClass = "px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200";
+                    const dropdownClass = "px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-100";
                     return (
                         <select
                             className={dropdownClass}
@@ -1746,7 +1214,7 @@ function App() {
                 };
 
                 const TickerSelector = () => {
-                    const btnClass = "px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-200 flex items-center gap-1";
+                    const btnClass = "px-3 py-1 text-xs font-bold rounded-md bg-gray-100 border border-gray-100 flex items-center gap-1";
                     const tickers = uniqueTickers;
                     const [open, setOpen] = useState(false);
                     const [query, setQuery] = useState("");
@@ -1784,11 +1252,11 @@ function App() {
                                 <i className="ph ph-caret-down text-gray-500"></i>
                             </button>
                             {open && (
-                                <div className="absolute top-full left-0 mt-1 z-40 w-56 bg-white border border-gray-200 rounded-md shadow-lg">
+                                <div className="absolute top-full left-0 mt-1 z-40 w-56 bg-white border border-gray-100 rounded-md shadow-lg">
                                     <div className="p-2 border-b border-gray-100">
                                         <input
                                             type="text"
-                                            className="w-full px-2 py-1 text-xs border border-gray-200 rounded-md"
+                                            className="w-full px-2 py-1 text-xs border border-gray-100 rounded-md"
                                             placeholder="Søg…"
                                             value={query}
                                             onChange={e => setQuery(e.target.value)}
@@ -1808,7 +1276,7 @@ function App() {
                                         ))}
                                     </div>
                                     <div className="p-2 border-t border-gray-100 flex items-center justify-between">
-                                        <button className="px-2 py-1 text-xs rounded-md border border-gray-200 hover:bg-gray-100" onClick={clearAll}>Nulstil</button>
+                                        <button className="px-2 py-1 text-xs rounded-md border border-gray-100 hover:bg-gray-100" onClick={clearAll}>Nulstil</button>
                                         <button className="px-2 py-1 text-xs rounded-md bg-gray-800 text-white hover:bg-gray-700" onClick={() => setOpen(false)}>Færdig</button>
                                     </div>
                                 </div>
@@ -2385,7 +1853,7 @@ function App() {
                             {/* LEFT: GRAPHS */}
                             <div className="lg:col-span-2 space-y-8">
                                 {/* GROWTH GRAPH */}
-                                <div className="bg-white p-4 rounded-xl border shadow-sm">
+                                <div className="bg-white p-4 rounded-xl shadow-sm">
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="font-bold text-gray-800 text-sm uppercase">Afkast (%)</h3>
                                         <div className="flex items-center gap-2">
@@ -2516,7 +1984,7 @@ function App() {
                                 </div>
 
                                 {/* VALUE GRAPH */}
-                                <div className="bg-white p-4 rounded-xl border shadow-sm">
+                                <div className="bg-white p-4 rounded-xl shadow-sm">
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="font-bold text-gray-800 text-sm uppercase">Porteføljens Værdi</h3>
                                         <div className="flex items-center gap-2">
@@ -2807,25 +2275,25 @@ function App() {
                                 <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                                     {/* Row 1: Column Titles */}
                                     <tr>
-                                        <th className="p-2 border-b sticky left-0 bg-gray-50 z-20 w-8"></th>
+                                        <th className="p-2 border-b border-gray-100 sticky left-0 bg-gray-50 z-20 w-8"></th>
                                         {CSV_COLUMNS.map(c => {
                                             if (filterAccount !== 'All' && c === 'Account') return null;
                                             const currentAccCurrency = filterAccount !== 'All' ? (config.currencies[filterAccount] || 'DKK') : '';
                                             const showCur = (c === 'Commission' || c === 'Withheld Tax') && currentAccCurrency;
 
                                             return (
-                                                <th key={c} className="p-2 border-b font-semibold text-gray-600">
+                                                <th key={c} className="p-2 border-b border-gray-100 font-semibold text-gray-600">
                                                     {c} {showCur && <span className="ml-1 text-[10px] text-gray-400">({currentAccCurrency})</span>}
                                                 </th>
                                             );
                                         })}
-                                        <th className="p-2 border-b font-semibold text-gray-600 text-right">Delta</th>
-                                        <th className="p-2 border-b font-semibold text-gray-600 text-right">Balance</th>
+                                        <th className="p-2 border-b border-gray-100 font-semibold text-gray-600 text-right">Delta</th>
+                                        <th className="p-2 border-b border-gray-100 font-semibold text-gray-600 text-right">Balance</th>
                                     </tr>
 
                                     {/* Row 2: Filter Inputs */}
                                     <tr className="bg-gray-50">
-                                        <th className="p-1 border-b sticky left-0 bg-gray-50 z-20">
+                                        <th className="p-1 border-b border-gray-100 sticky left-0 bg-gray-50 z-20">
                                             {/* Clear Filters Button (shows only if filters exist) */}
                                             {Object.keys(filters).some(k => filters[k]) && (
                                                 <button onClick={() => setFilters({})} className="text-gray-400 hover:text-red-500" title="Clear All Filters">
@@ -2836,7 +2304,7 @@ function App() {
                                         {CSV_COLUMNS.map(c => {
                                             if (filterAccount !== 'All' && c === 'Account') return null;
                                             return (
-                                                <th key={c} className="p-1 border-b">
+                                                <th key={c} className="p-1 border-b border-gray-100">
                                                     <input
                                                         className="w-full text-[10px] p-1 border border-gray-200 rounded bg-white focus:border-blue-300 outline-none"
                                                         placeholder={`Filter...`}
@@ -2847,14 +2315,14 @@ function App() {
                                             );
                                         })}
                                         {/* Empty spacers for Delta/Balance columns (usually not filtered) */}
-                                        <th className="p-1 border-b"></th>
-                                        <th className="p-1 border-b"></th>
+                                        <th className="p-1 border-b border-gray-100"></th>
+                                        <th className="p-1 border-b border-gray-100"></th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-gray-100">
+                                <tbody className="divide-y divide-gray-50">
                                     {displayRows.map(row => (
                                         <tr key={row._idx} className="group hover:bg-blue-50/30">
-                                            <td className="p-1 text-center sticky left-0 bg-white group-hover:bg-blue-50/30 border-r">
+                                            <td className="p-1 text-center sticky left-0 bg-white group-hover:bg-blue-50/30 border-r border-gray-100">
                                                 <button onClick={() => confirm('Delete?') && setRows(prev => prev.filter((_, i) => i !== row._idx))} className="text-gray-300 hover:text-red-500"><i className="ph ph-trash"></i></button>
                                             </td>
 

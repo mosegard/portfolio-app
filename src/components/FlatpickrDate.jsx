@@ -10,10 +10,11 @@ const FlatpickrDate = ({ value, onChange, onKeyDown }) => {
         if (inputRef.current) {
             fpRef.current = flatpickr(inputRef.current, {
                 defaultDate: value,
+                // Display and value use Danish format (one input only)
                 dateFormat: "d/m/Y",
-                altInput: true,
-                altFormat: "d-M-Y",
-                locale: Danish, 
+                // Prevent duplicate visible inputs (altInput adds a second input)
+                altInput: false,
+                locale: Danish,
                 allowInput: true,
                 onChange: (selectedDates, dateStr) => {
                     onChange(dateStr);
