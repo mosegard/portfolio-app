@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/* --- YOUR CUSTOM STYLES RESTORED --- */
+
+body {
+    background-color: #f8fafc;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    overflow: auto; /* Restored from your original file */
+}
+
+/* Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+/* Input Base Style */
+.input-base {
+    transition: all 0.2s;
+    outline: none;
+    background: transparent;
+}
+.input-base:focus {
+    background: white;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    border-color: #3b82f6;
+}
+
+/* Sticky Columns */
+.sticky-col-date {
+    position: sticky;
+    left: 0;
+    z-index: 20;
+}
+.sticky-col-action {
+    position: sticky;
+    right: 0;
+    z-index: 20;
+}
+
+/* Anonymity Blur */
+.anonymity-blur-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.5);
+    backdrop-filter: blur(18px) brightness(1.08);
+    transition: opacity 0.3s;
+}
+.anonymity-blur-icon {
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 50%;
+    box-shadow: 0 2px 16px 0 rgba(0, 0, 0, 0.10);
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: box-shadow 0.2s;
+}
+.anonymity-blur-icon:hover {
+    box-shadow: 0 4px 32px 0 rgba(59, 130, 246, 0.15);
+}
+.anonymity-blur-icon i {
+    font-size: 3rem;
+    color: #2563eb;
+}
+.anonymity-blur-icon span {
+    margin-top: 12px;
+    font-size: 1rem;
+    color: #2563eb;
+    font-weight: 600;
+}
+
+/* Cards & Nav */
+.card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e5e7eb;
+    padding: 20px;
+}
+.nav-item {
+    cursor: pointer;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #4b5563;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.15s;
+}
+.nav-item:hover {
+    background-color: #f3f4f6;
+    color: #111827;
+}
+.nav-item.active {
+    background-color: #eff6ff;
+    color: #1d4ed8;
+}
+.sub-nav-item {
+    cursor: pointer;
+    padding: 6px 12px 6px 36px;
+    font-size: 13px;
+    color: #6b7280;
+    border-radius: 6px;
+    transition: all 0.15s;
+    display: block;
+}
+.sub-nav-item:hover {
+    color: #111827;
+    background-color: #f9fafb;
+}
+.sub-nav-item.active {
+    color: #1d4ed8;
+    font-weight: 600;
+    background-color: #eff6ff;
+}
+
+/* Touch Device Fixes */
+@media (hover: none) {
+    .nav-item:hover,
+    .sub-nav-item:hover,
+    .card:hover,
+    [class*="hover:"] {
+        background: inherit !important;
+        color: inherit !important;
+        border-color: inherit !important;
+        box-shadow: none !important;
+    }
+}
