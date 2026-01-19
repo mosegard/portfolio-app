@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback  } from 'react';
 import {
     AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
     CartesianGrid, ReferenceLine, ReferenceArea, ComposedChart, Scatter
@@ -23,14 +23,40 @@ import {
 import usePortfolioEngine from './hooks/usePortfolioEngine';
 
 function App() {
-    const [lastUpdate, setLastUpdate] = useState(null);
+    const [lastUpdate, setLastUpdate] = useState(() => {
+        try {
+            const cache = JSON.parse(localStorage.getItem('marketDataCache') || '{}');
+            // Find the most recent update time across all cached tickers
+            const timestamps = Object.values(cache)
+                .map(d => d.lastUpdated)
+                .filter(t => t > 0);
+            
+            if (timestamps.length > 0) {
+                return new Date(Math.max(...timestamps));
+            }
+        } catch {}
+        return null;
+    });
     const [showMoversModal, setShowMoversModal] = useState(false);
     const [config, setConfig] = useState({
         askAccount: '',
         currencies: {},
         hidden: []
     });
-    const [rows, setRows] = useState([]);
+   // 1. Load Rows (Transactions) from Cache
+    const [rows, setRows] = useState(() => {
+        try {
+            const saved = localStorage.getItem('portfolio_rows');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+
+    // 2. Save Rows to Cache whenever they change
+    useEffect(() => {
+        try {
+            localStorage.setItem('portfolio_rows', JSON.stringify(rows));
+        } catch (e) { console.warn('Row storage failed', e); }
+    }, [rows]);
     const [view, setView] = useState('dashboard');
     const [filterAccount, setFilterAccount] = useState('All');
     const [taxYear, setTaxYear] = useState(new Date().getFullYear().toString());
@@ -160,39 +186,45 @@ function App() {
 
     // Market data fetcher (restored)
     // Market data fetcher (Updated for Extended Hours)
-    const fetchMarketData = async (silent = false) => {
+    const fetchMarketData = useCallback(async (silent = false) => {
+        // 1. Snapshot dependencies needed for the FETCH logic only
+        // We do NOT include marketData here to avoid circular dependencies
+        const currentTxs = txs;
+        const currentSettings = settings;
+        const currentTickers = uniqueTickers;
+
+        // Early exit if nothing to fetch
+        const usedCurrencies = [...new Set(currentTxs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
+        const bench = currentSettings.benchmarkTicker ? [currentSettings.benchmarkTicker] : [];
+        const allTickers = [...currentTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...bench];
+
+        if (allTickers.length === 0) return;
+
         try {
             if (!silent) setLoading(true);
 
             const now = Math.floor(Date.now() / 1000);
             let globalStart = now - (2 * 365 * 24 * 60 * 60);
-            if (txs.length > 0) {
-                const firstTx = txs[0].date.getTime() / 1000;
+            if (currentTxs.length > 0) {
+                const firstTx = currentTxs[0].date.getTime() / 1000;
                 globalStart = firstTx - (30 * 24 * 60 * 60);
             }
 
-            const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
-            const bench = settings.benchmarkTicker ? [settings.benchmarkTicker] : [];
-            const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...bench];
-
-            if (allTickers.length === 0) {
-                if (!silent) setLoading(false);
-                return;
-            }
-
-            const newMData = { ...marketData };
+            // 2. Create a local object to store updates (Do not read state here)
+            const incomingData = {};
 
             await Promise.all(allTickers.map(async (ticker) => {
                 try {
                     let myStart = globalStart;
-                    if (uniqueTickers.includes(ticker)) {
-                        const firstTxForTicker = txs.find(t => t.ticker === ticker);
+                    if (currentTickers.includes(ticker)) {
+                        const firstTxForTicker = currentTxs.find(t => t.ticker === ticker);
                         if (firstTxForTicker) {
                             myStart = (firstTxForTicker.date.getTime() / 1000) - (30 * 24 * 60 * 60);
                         }
                     }
+
                     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${now}&interval=1d&events=div`;
-                    const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
+                    const res = await fetch(`${currentSettings.proxyUrl}${encodeURIComponent(url)}`);
                     const json = await res.json();
 
                     if (json.chart?.result) {
@@ -206,43 +238,37 @@ function App() {
                             close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
                         })).filter(x => x.close != null);
 
-                        // --- EXTENDED HOURS LOGIC START ---
+                        // --- EXTENDED HOURS LOGIC ---
                         let livePrice = meta.regularMarketPrice;
                         let lastTradeTime = meta.regularMarketTime;
 
-                        // Check if Post-Market (After hours) is newer and exists
                         if (meta.postMarketPrice && meta.postMarketTime > lastTradeTime) {
                             livePrice = meta.postMarketPrice;
                             lastTradeTime = meta.postMarketTime;
-                        }
-                        // Check if Pre-Market is newer and exists
-                        else if (meta.preMarketPrice && meta.preMarketTime > lastTradeTime) {
+                        } else if (meta.preMarketPrice && meta.preMarketTime > lastTradeTime) {
                             livePrice = meta.preMarketPrice;
                             lastTradeTime = meta.preMarketTime;
                         }
-                        // --- EXTENDED HOURS LOGIC END ---
 
                         let prevClose = meta.chartPreviousClose || meta.previousClose;
 
-                        // Fallback logic if history exists but regularMarketPrice is stale
+                        // Fallback logic
                         if (cleanHistory.length >= 2) {
                             const lastCandle = cleanHistory[cleanHistory.length - 1];
                             const secondLastCandle = cleanHistory[cleanHistory.length - 2];
-
-                            // If the last candle in history is essentially the current price, use the one before it as prevClose
                             const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
+
                             if (isLastCandleToday) {
                                 prevClose = secondLastCandle.close;
                             } else {
-                                // Otherwise, the last candle IS the previous close
                                 prevClose = lastCandle.close;
                             }
                         } else if (cleanHistory.length === 1) {
                             prevClose = cleanHistory[0].close;
                         }
 
-                        newMData[ticker] = {
-                            ...newMData[ticker],
+                        // Save to LOCAL object
+                        incomingData[ticker] = {
                             history: cleanHistory,
                             currency: meta.currency,
                             price: livePrice,
@@ -256,22 +282,63 @@ function App() {
                 }
             }));
 
-            setMarketData(newMData);
+            // 3. FUNCTIONAL STATE UPDATE (Safe from dependency loops)
+            // We read 'prev' here instead of depending on 'marketData'
+            setMarketData(prev => {
+                const updated = { ...prev, ...incomingData };
+                // Update Cache immediately after state calculation
+                try {
+                    localStorage.setItem('marketDataCache', JSON.stringify(updated));
+                } catch (e) { console.warn('Storage full', e); }
+                return updated;
+            });
+
             setLastUpdate(new Date());
 
-            try {
-                localStorage.setItem('marketDataCache', JSON.stringify(newMData));
-            } catch (e) {
-                console.warn('Storage full', e);
-            }
         } finally {
             if (!silent) setLoading(false);
         }
-    };
+    }, [settings.proxyUrl, settings.benchmarkTicker, uniqueTickers, txs, settings]); // Removed marketData
 
     const calc = usePortfolioEngine(txs, marketData, settings, config, years);
 
+    // Stabilize dependencies for useEffect
+    // Stabilize dependencies for useEffect
+   // 4. Auto-Load & Refresh Logic
+    const uniqueTickersCount = uniqueTickers.length;
+    const uniqueTickersKey = useMemo(() => uniqueTickers.join(','), [uniqueTickers]);
 
+    useEffect(() => {
+        // If we have no tickers (and no benchmark), stop.
+        if (uniqueTickersCount === 0 && !settings.benchmarkTicker) return;
+
+        const checkAndFetch = () => {
+            const now = Date.now();
+            let isStale = true;
+
+            // Check if our current lastUpdate is recent enough (less than 60s old)
+            if (lastUpdate && (now - lastUpdate.getTime() < 60000)) {
+                isStale = false;
+            }
+
+            if (isStale) {
+                console.log("Data is stale or missing, fetching...");
+                fetchMarketData(true); // true = silent fetch
+            }
+        };
+
+        // Run immediately on mount/update
+        checkAndFetch();
+
+        // Run interval every 60 seconds
+        const interval = setInterval(() => {
+            fetchMarketData(true);
+        }, 60000);
+
+        return () => clearInterval(interval);
+    }, [uniqueTickersKey, uniqueTickersCount, settings.benchmarkTicker, fetchMarketData, lastUpdate]);
+
+    
     const splitCandidates = useMemo(() => {
         const candidates = [];
         const buys = txs.filter(t => (t.type === 'BUY') && marketData[t.ticker] && marketData[t.ticker].history);
