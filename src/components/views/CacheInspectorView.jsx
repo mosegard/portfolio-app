@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { formatCurrency } from '../../utils';
 
+const CACHE_KEY = 'marketDataCache_v2'; // Must match useMarketData.js
+
 const CacheInspectorView = ({ onClose }) => {
     const [cacheData, setCacheData] = useState({});
     const [cacheSize, setCacheSize] = useState(0);
@@ -11,7 +13,7 @@ const CacheInspectorView = ({ onClose }) => {
 
     const loadCache = () => {
         try {
-            const raw = localStorage.getItem('marketDataCache') || '{}';
+            const raw = localStorage.getItem(CACHE_KEY) || '{}';
             // Calculate size in KB
             const size = new Blob([raw]).size;
             setCacheSize(size);
@@ -25,13 +27,13 @@ const CacheInspectorView = ({ onClose }) => {
         if (!confirm(`Delete cache for ${ticker}?`)) return;
         const newCache = { ...cacheData };
         delete newCache[ticker];
-        localStorage.setItem('marketDataCache', JSON.stringify(newCache));
+        localStorage.setItem(CACHE_KEY, JSON.stringify(newCache));
         loadCache(); // Refresh UI
     };
 
     const clearAll = () => {
         if (!confirm("ARE YOU SURE? This will delete ALL market data prices.")) return;
-        localStorage.removeItem('marketDataCache');
+        localStorage.removeItem(CACHE_KEY);
         loadCache();
         window.location.reload(); // Reload to force app to re-fetch
     };
@@ -44,7 +46,7 @@ const CacheInspectorView = ({ onClose }) => {
             <div className="flex justify-between items-center mb-6">
                 <div>
                     <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                        <i className="ph ph-database text-purple-600"></i> Cache Inspector
+                        <i className="ph ph-database text-purple-600"></i> Cache Inspector (v2)
                     </h2>
                     <p className="text-sm text-gray-500 mt-1">
                         Size: <span className={`font-mono font-bold ${cacheSize > 4000000 ? 'text-red-600' : 'text-green-600'}`}>
@@ -78,13 +80,16 @@ const CacheInspectorView = ({ onClose }) => {
                         <tbody className="divide-y divide-gray-100">
                             {sortedKeys.map(ticker => {
                                 const item = cacheData[ticker];
-                                const date = item.lastUpdated ? new Date(item.lastUpdated).toLocaleString() : 'Unknown';
-                                const points = item.history ? item.history.length : 0;
+                                // V2 Format: u = updated, p = price, h = history array
+                                const date = item.u ? new Date(item.u).toLocaleString() : 'Unknown';
+                                const price = item.p || 0;
+                                const points = item.h ? item.h.length : 0;
+                                
                                 return (
                                     <tr key={ticker} className="hover:bg-gray-50">
                                         <td className="p-3 font-bold text-gray-800">{ticker}</td>
                                         <td className="p-3 text-gray-500 font-mono text-xs">{date}</td>
-                                        <td className="p-3 text-right font-mono">{formatCurrency(item.price)}</td>
+                                        <td className="p-3 text-right font-mono">{formatCurrency(price)}</td>
                                         <td className="p-3 text-right font-mono text-gray-500">{points}</td>
                                         <td className="p-3 text-center">
                                             <button 

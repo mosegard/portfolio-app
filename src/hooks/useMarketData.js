@@ -1,141 +1,226 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import { compressMarketData, decompressMarketData } from '../utils';
+
+// Constants
+const CACHE_KEY = 'marketDataCache_v2';
+const STALE_THRESHOLD_ACTIVE = 60 * 1000; // 60 seconds
+const STALE_THRESHOLD_INACTIVE = 24 * 60 * 60 * 1000; // 24 hours
 
 export default function useMarketData(txs, settings, uniqueTickers) {
-    const [marketData, setMarketData] = useState(() => JSON.parse(localStorage.getItem('marketDataCache') || '{}'));
+    const [marketData, setMarketData] = useState({});
     const [loading, setLoading] = useState(false);
-    const [lastUpdate, setLastUpdate] = useState(() => {
-        try {
-            const cache = JSON.parse(localStorage.getItem('marketDataCache') || '{}');
-            const timestamps = Object.values(cache).map(d => d.lastUpdated).filter(t => t > 0);
-            if (timestamps.length > 0) return new Date(Math.max(...timestamps));
-        } catch { }
-        return null;
-    });
+    const [lastUpdate, setLastUpdate] = useState(null);
 
-    const uniqueTickersCount = uniqueTickers.length;
-    const uniqueTickersKey = useMemo(() => uniqueTickers.join(','), [uniqueTickers]);
-
-    const fetchMarketData = useCallback(async (silent = false) => {
-        const currentTxs = txs;
-        const currentSettings = settings;
-        const currentTickers = uniqueTickers;
-
-        const usedCurrencies = [...new Set(currentTxs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
-        const bench = currentSettings.benchmarkTicker ? [currentSettings.benchmarkTicker] : [];
-        const allTickers = [...currentTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...bench];
-
-        if (allTickers.length === 0) return;
-
-        try {
-            if (!silent) setLoading(true);
-            const now = Math.floor(Date.now() / 1000);
-            let globalStart = now - (2 * 365 * 24 * 60 * 60); // Default 2 years back
-            
-            // Optimization: If we have transactions, start fetching from 30 days before the first one
-            if (currentTxs.length > 0) {
-                const firstTx = currentTxs[0].date.getTime() / 1000;
-                globalStart = firstTx - (30 * 24 * 60 * 60);
-            }
-
-            const incomingData = {};
-
-            await Promise.all(allTickers.map(async (ticker) => {
-                try {
-                    let myStart = globalStart;
-                    if (currentTickers.includes(ticker)) {
-                        const firstTxForTicker = currentTxs.find(t => t.ticker === ticker);
-                        if (firstTxForTicker) {
-                            myStart = (firstTxForTicker.date.getTime() / 1000) - (30 * 24 * 60 * 60);
-                        }
-                    }
-
-                    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${now}&interval=1d&events=div`;
-                    const res = await fetch(`${currentSettings.proxyUrl}${encodeURIComponent(url)}`);
-                    const json = await res.json();
-
-                    if (json.chart?.result) {
-                        const result = json.chart.result[0];
-                        const meta = result.meta;
-                        const quotes = result.indicators.quote[0];
-                        const dates = result.timestamp;
-
-                        const cleanHistory = dates.map((t, i) => ({
-                            date: new Date(t * 1000).toISOString().split('T')[0],
-                            close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
-                        })).filter(x => x.close != null);
-
-                        let livePrice = meta.regularMarketPrice;
-                        let lastTradeTime = meta.regularMarketTime;
-
-                        if (meta.postMarketPrice && meta.postMarketTime > lastTradeTime) {
-                            livePrice = meta.postMarketPrice;
-                            lastTradeTime = meta.postMarketTime;
-                        } else if (meta.preMarketPrice && meta.preMarketTime > lastTradeTime) {
-                            livePrice = meta.preMarketPrice;
-                            lastTradeTime = meta.preMarketTime;
-                        }
-
-                        let prevClose = meta.chartPreviousClose || meta.previousClose;
-
-                        // Fallback logic for previous close if missing
-                        if (cleanHistory.length >= 2) {
-                            const lastCandle = cleanHistory[cleanHistory.length - 1];
-                            const secondLastCandle = cleanHistory[cleanHistory.length - 2];
-                            const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
-                            if (isLastCandleToday) prevClose = secondLastCandle.close;
-                            else prevClose = lastCandle.close;
-                        } else if (cleanHistory.length === 1) {
-                            prevClose = cleanHistory[0].close;
-                        }
-
-                        incomingData[ticker] = {
-                            history: cleanHistory,
-                            currency: meta.currency,
-                            price: livePrice,
-                            previousClose: prevClose,
-                            lastTradeTime: lastTradeTime,
-                            lastUpdated: Date.now()
-                        };
-                    }
-                } catch (e) {
-                    console.warn('Fetch failed', ticker, e);
-                }
-            }));
-
-            setMarketData(prev => {
-                const updated = { ...prev, ...incomingData };
-                try {
-                    localStorage.setItem('marketDataCache', JSON.stringify(updated));
-                } catch (e) { console.warn('Storage full', e); }
-                return updated;
-            });
-            setLastUpdate(new Date());
-
-        } finally {
-            if (!silent) setLoading(false);
-        }
-    }, [txs, settings, uniqueTickers]);
-
-    // Auto-refresh logic
+    // 1. Load & Decompress on Mount
     useEffect(() => {
-        if (uniqueTickersCount === 0 && !settings.benchmarkTicker) return;
-
-        const checkAndFetch = () => {
-            const now = Date.now();
-            let isStale = true;
-            if (lastUpdate && (now - lastUpdate.getTime() < 60000)) {
-                isStale = false;
+        try {
+            const raw = localStorage.getItem(CACHE_KEY);
+            if (raw) {
+                const compressedStore = JSON.parse(raw);
+                const inflated = {};
+                
+                Object.keys(compressedStore).forEach(ticker => {
+                    const item = compressedStore[ticker];
+                    inflated[ticker] = {
+                        ...item,
+                        history: decompressMarketData(item.h),
+                        lastUpdated: item.u
+                    };
+                });
+                
+                setMarketData(inflated);
+                
+                const times = Object.values(inflated).map(d => d.lastUpdated).filter(t => t > 0);
+                if (times.length) setLastUpdate(new Date(Math.max(...times)));
             }
-            if (isStale) {
-                console.log("Data is stale or missing, fetching...");
-                fetchMarketData(true);
-            }
-        };
+        } catch (e) {
+            console.error("Cache load failed", e);
+        }
+    }, []);
 
-        checkAndFetch();
-        const interval = setInterval(() => fetchMarketData(true), 60000);
-        return () => clearInterval(interval);
-    }, [uniqueTickersKey, uniqueTickersCount, settings.benchmarkTicker, fetchMarketData, lastUpdate]);
+    // 2. Safe Storage with Eviction Policy (NOW MEMOIZED)
+    const saveToCache = useCallback((newDataMap) => {
+        try {
+            // Load current compressed state (source of truth)
+            const raw = localStorage.getItem(CACHE_KEY);
+            let store = raw ? JSON.parse(raw) : {};
+
+            // Merge new data
+            Object.keys(newDataMap).forEach(ticker => {
+                store[ticker] = newDataMap[ticker];
+            });
+
+            try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify(store));
+            } catch (e) {
+                if (e.name === 'QuotaExceededError') {
+                    console.warn("Storage full! Evicting old inactive tickers...");
+                    
+                    // Identify Active Tickers
+                    const activeTickers = new Set(uniqueTickers);
+                    if (settings.benchmarkTicker) activeTickers.add(settings.benchmarkTicker);
+
+                    // Sort by Last Updated (Oldest first)
+                    const sortedKeys = Object.keys(store).sort((a, b) => {
+                        return (store[a].u || 0) - (store[b].u || 0);
+                    });
+
+                    let freed = false;
+                    for (const key of sortedKeys) {
+                        // Don't delete active tickers or currency pairs
+                        if (!activeTickers.has(key) && !key.includes('DKK=X')) {
+                            delete store[key];
+                            freed = true;
+                            try {
+                                localStorage.setItem(CACHE_KEY, JSON.stringify(store));
+                                console.log(`Evicted ${key} to save space.`);
+                                break; 
+                            } catch (e2) { continue; }
+                        }
+                    }
+                    
+                    if (!freed) console.error("Cache is full and only contains active tickers.");
+                }
+            }
+        } catch (err) {
+            console.error("Critical cache error", err);
+        }
+    }, [uniqueTickers, settings.benchmarkTicker]); // <--- Dependencies for saveToCache
+
+    // 3. The Fetcher
+    const fetchMarketData = useCallback(async (force = false) => {
+        // Calculate current holdings
+        const currentHoldings = new Set();
+        const holdingMap = {};
+        txs.forEach(t => {
+             if(!holdingMap[t.ticker]) holdingMap[t.ticker] = 0;
+             if(t.type === 'BUY') holdingMap[t.ticker] += t.qty;
+             if(t.type === 'SELL') holdingMap[t.ticker] -= t.qty;
+        });
+        Object.entries(holdingMap).forEach(([t, qty]) => {
+            if(Math.abs(qty) > 0.001) currentHoldings.add(t);
+        });
+
+        const activeSet = new Set(currentHoldings);
+        if (settings.benchmarkTicker) activeSet.add(settings.benchmarkTicker);
+
+        const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
+        usedCurrencies.forEach(c => activeSet.add(`${c}DKK=X`));
+
+        const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...((settings.benchmarkTicker ? [settings.benchmarkTicker] : []))];
+        const uniqueList = [...new Set(allTickers)];
+
+        if (uniqueList.length === 0) return;
+
+        const now = Date.now();
+        const targets = [];
+
+        uniqueList.forEach(ticker => {
+            const cachedItem = marketData[ticker];
+            const lastUpd = cachedItem?.lastUpdated || 0;
+            const age = now - lastUpd;
+            const isActive = activeSet.has(ticker);
+            
+            let shouldFetch = false;
+            if (force) shouldFetch = true;
+            else if (!cachedItem) shouldFetch = true;
+            else if (isActive && age > STALE_THRESHOLD_ACTIVE) shouldFetch = true;
+            else if (!isActive && age > STALE_THRESHOLD_INACTIVE) shouldFetch = true;
+
+            if (shouldFetch) {
+                targets.push({ ticker, isActive });
+            }
+        });
+
+        if (targets.length === 0) return;
+
+        setLoading(true);
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        let globalStart = nowSec - (2 * 365 * 24 * 60 * 60); 
+        if (txs.length > 0) {
+            const firstTx = txs[0].date.getTime() / 1000;
+            globalStart = firstTx - (30 * 24 * 60 * 60);
+        }
+
+        const newCompressedData = {};
+        const newInflatedData = {};
+
+        await Promise.all(targets.map(async ({ ticker }) => {
+            try {
+                let myStart = globalStart;
+                const firstTxForTicker = txs.find(t => t.ticker === ticker);
+                if (firstTxForTicker) {
+                    myStart = (firstTxForTicker.date.getTime() / 1000) - (30 * 24 * 60 * 60);
+                }
+
+                const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${nowSec}&interval=1d&events=div`;
+                const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
+                const json = await res.json();
+
+                if (json.chart?.result) {
+                    const result = json.chart.result[0];
+                    const meta = result.meta;
+                    const quotes = result.indicators.quote[0];
+                    const dates = result.timestamp;
+
+                    const cleanHistory = dates.map((t, i) => ({
+                        date: new Date(t * 1000).toISOString().split('T')[0],
+                        close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
+                    })).filter(x => x.close != null);
+
+                    let livePrice = meta.regularMarketPrice;
+                    let lastTradeTime = meta.regularMarketTime;
+                    if (meta.postMarketPrice && meta.postMarketTime > lastTradeTime) {
+                        livePrice = meta.postMarketPrice; lastTradeTime = meta.postMarketTime;
+                    } else if (meta.preMarketPrice && meta.preMarketTime > lastTradeTime) {
+                        livePrice = meta.preMarketPrice; lastTradeTime = meta.preMarketTime;
+                    }
+
+                    let prevClose = meta.chartPreviousClose || meta.previousClose;
+                    if (cleanHistory.length >= 2) {
+                         const lastCandle = cleanHistory[cleanHistory.length - 1];
+                         const secondLastCandle = cleanHistory[cleanHistory.length - 2];
+                         const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
+                         if (isLastCandleToday) prevClose = secondLastCandle.close; else prevClose = lastCandle.close;
+                    } else if (cleanHistory.length === 1) prevClose = cleanHistory[0].close;
+
+                    const nowTs = Date.now();
+
+                    newCompressedData[ticker] = {
+                        h: compressMarketData(cleanHistory),
+                        c: meta.currency,
+                        p: livePrice,
+                        pc: prevClose,
+                        lt: lastTradeTime,
+                        u: nowTs 
+                    };
+
+                    newInflatedData[ticker] = {
+                        history: cleanHistory,
+                        currency: meta.currency,
+                        price: livePrice,
+                        previousClose: prevClose,
+                        lastTradeTime: lastTradeTime,
+                        lastUpdated: nowTs
+                    };
+                }
+            } catch (e) {
+                console.warn(`Failed to fetch ${ticker}`, e);
+            }
+        }));
+
+        if (Object.keys(newInflatedData).length > 0) {
+            setMarketData(prev => ({ ...prev, ...newInflatedData }));
+            setLastUpdate(new Date());
+            
+            // This is now safe because saveToCache is memoized
+            saveToCache(newCompressedData);
+        }
+
+        setLoading(false);
+
+    }, [txs, settings, uniqueTickers, marketData, saveToCache]); // <--- Added saveToCache
 
     return { marketData, loading, lastUpdate, fetchMarketData };
 }
