@@ -306,3 +306,40 @@ export function rowsToTransactions(rows) {
     });
     return txs;
 }
+
+/**
+ * Compresses Yahoo object array to a minimal Tuple array for storage.
+ * Input: [{ date: '2023-01-01', close: 100.5, ... }, ...]
+ * Output: { u: 1672531200 (last_updated), h: [[19348, 100.5], [19349, 101.2]] } 
+ * (We store days-since-epoch to save even more space than full timestamps)
+ */
+export const compressMarketData = (history) => {
+    if (!history || history.length === 0) return [];
+    
+    return history.map(h => {
+        // Store date as "Days since 1970" to save space (integer vs long string)
+        const date = new Date(h.date);
+        const days = Math.floor(date.getTime() / (1000 * 60 * 60 * 24));
+        // Round price to 2 decimals to save string length in JSON
+        const price = Math.round(h.close * 100) / 100; 
+        return [days, price];
+    });
+};
+
+/**
+ * Decompresses the Tuple array back to the Object format the app expects.
+ */
+export const decompressMarketData = (compressedHistory) => {
+    if (!compressedHistory || !Array.isArray(compressedHistory)) return [];
+
+    return compressedHistory.map(tuple => {
+        const [days, price] = tuple;
+        // Convert days-since-epoch back to YYYY-MM-DD
+        const dateObj = new Date(days * 24 * 60 * 60 * 1000);
+        const dateStr = dateObj.toISOString().split('T')[0];
+        return {
+            date: dateStr,
+            close: price
+        };
+    });
+};

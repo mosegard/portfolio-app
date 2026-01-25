@@ -131,16 +131,3 @@ body {
     font-weight: 600;
     background-color: #eff6ff;
 }
-
-/* Touch Device Fixes */
-@media (hover: none) {
-    .nav-item:hover,
-    .sub-nav-item:hover,
-    .card:hover,
-    [class*="hover:"] {
-        background: inherit !important;
-        color: inherit !important;
-        border-color: inherit !important;
-        box-shadow: none !important;
-    }
-}
