@@ -14,9 +14,10 @@ const EditorView = ({
     config, 
     saveToGithub, 
     statusMsg, 
-    handleFileUpload 
+    handleFileUpload,
+    detectedCurrencies // <--- Receive Prop
 }) => {
-    // --- Local State (Moved from App.jsx) ---
+    // --- Local State ---
     const [filters, setFilters] = useState({});
 
     // --- Helpers ---
@@ -31,6 +32,12 @@ const EditorView = ({
 
     const addRow = () => {
         const dStr = normalizeDate(new Date().toISOString().split('T')[0]);
+        // Default new rows to the currency of the current filtered account, if known
+        // Logic: Manual Config > Auto-Detected > Default DKK
+        const defaultCur = filterAccount !== 'All' 
+            ? (config.currencies[filterAccount] || detectedCurrencies[filterAccount] || 'DKK') 
+            : 'DKK';
+        
         setRows(prev => [{ 
             'Date': dStr, 
             'Type': 'Stock', 
@@ -40,7 +47,7 @@ const EditorView = ({
             'FxRate': 1, 
             'Commission': 0, 
             'Withheld Tax': 0, 
-            'Currency': 'DKK', 
+            'Currency': defaultCur, 
             'Account': filterAccount !== 'All' ? filterAccount : '' 
         }, ...prev]);
     };
@@ -55,7 +62,7 @@ const EditorView = ({
         if (next) next.focus();
     };
 
-    // --- Preparation Logic ---
+    // --- PREPARE DATA ---
     const viewRows = [...rows]
         .map((r, i) => ({ ...r, _origIdx: i }))
         .sort((a, b) => (parseDanishDate(a['Date']) || 0) - (parseDanishDate(b['Date']) || 0));
@@ -78,8 +85,13 @@ const EditorView = ({
         const tax = parseDanishNumber(row['Withheld Tax']);
         const taxRate = parseDanishNumber(row['FxRate']) || 1;
 
+        // --- CURRENCY LOGIC ---
+        // 1. Asset Currency: explicitly on the row
         const stockCurrency = (row['Currency'] || 'DKK').toUpperCase();
-        const accCurrency = (config.currencies[acc] || 'DKK').toUpperCase();
+        
+        // 2. Account Currency: Manual Config > Auto-Detected > DKK
+        const accCurrency = (config.currencies[acc] || detectedCurrencies[acc] || 'DKK').toUpperCase();
+        
         const isCrossCurrency = accCurrency !== stockCurrency;
         const conversionRate = isCrossCurrency ? taxRate : 1;
 
@@ -98,6 +110,7 @@ const EditorView = ({
         let calcDetail = '';
 
         if (isTrade) {
+            // (Price * Qty * Fx) + Comm
             const assetVal = (qty * price) * conversionRate;
             delta = -(assetVal + comm);
             calcDetail = `${effectiveType}: -(${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(comm)}`;
@@ -111,7 +124,8 @@ const EditorView = ({
         const meta = {
             isTrade, isCash, isCrossCurrency, stockCurrency, isDividend,
             holdingsSnapshot: holdingsBefore,
-            warnFx: (stockCurrency !== 'DKK' && taxRate === 1)
+            // Warn if Fx is 1 but currencies don't match (likely user error)
+            warnFx: (stockCurrency !== accCurrency && Math.abs(taxRate - 1) < 0.001)
         };
 
         return { ...row, _idx: idx, _bal: runningBalances[acc], _delta: delta, _calcDetail: calcDetail, _accCur: accCurrency, _meta: meta };
@@ -148,7 +162,14 @@ const EditorView = ({
                             <th className="p-2 border-b border-gray-100 sticky left-0 bg-gray-50 z-20 w-8"></th>
                             {CSV_COLUMNS.map(c => {
                                 if (filterAccount !== 'All' && c === 'Account') return null;
-                                const currentAccCurrency = filterAccount !== 'All' ? (config.currencies[filterAccount] || 'DKK') : '';
+                                
+                                // Logic: Determine currency for this column header
+                                // If viewing specific account -> use that account's currency
+                                // If viewing All -> ambiguous (or show nothing)
+                                const currentAccCurrency = filterAccount !== 'All' 
+                                    ? (config.currencies[filterAccount] || detectedCurrencies[filterAccount] || 'DKK') 
+                                    : '';
+                                    
                                 const showCur = (c === 'Commission' || c === 'Withheld Tax') && currentAccCurrency;
 
                                 return (
@@ -262,7 +283,7 @@ const EditorView = ({
                                         fieldKey="Commission"
                                         rawKey="__comm_raw"
                                         extraClass={!row._meta.isTrade ? 'text-gray-300' : 'text-gray-700'}
-                                        title="Trading Fee"
+                                        title={`Trading Fee in ${row._accCur}`}
                                     />
                                 </td>
                                 {/* 5. Withheld Tax */}
@@ -271,7 +292,7 @@ const EditorView = ({
                                         const isDividend = row['Type'] === 'Dividend';
                                         const taxVal = parseDanishNumber(row['Withheld Tax']);
                                         let css = 'text-gray-300';
-                                        let tooltip = 'Dividend Tax';
+                                        let tooltip = `Dividend Tax in ${row._accCur}`;
 
                                         if (isDividend) {
                                             css = 'text-gray-700'; 
@@ -283,15 +304,14 @@ const EditorView = ({
                                                 const qty = parseDanishNumber(row['Qty']);
                                                 const price = parseDanishNumber(row['Price']);
                                                 const fx = parseDanishNumber(row['FxRate']) || 1;
-                                                const acc = row['Account'] || '';
-                                                const accCur = (config.currencies[acc] || 'DKK').toUpperCase();
-                                                const stockCur = (row['Currency'] || 'DKK').toUpperCase();
+                                                const accCur = row._accCur;
+                                                const stockCur = row._meta.stockCurrency;
                                                 const conversion = accCur !== stockCur ? fx : 1;
                                                 const grossAmount = qty * price * conversion;
 
                                                 if (grossAmount > 0) {
                                                     const pct = (taxVal / grossAmount) * 100;
-                                                    const isSuspicious = stockCur === 'DKK' ? (pct < 26 || pct > 28) : (pct < 14 || pct > 30);
+                                                    const isSuspicious = pct < 10 || pct > 45; 
                                                     if (isSuspicious) {
                                                         css = 'text-orange-700 bg-orange-50 border border-orange-300 font-bold';
                                                         tooltip = `Warning: Unusual Tax Rate (${pct.toFixed(1)}%). Check amounts.`;

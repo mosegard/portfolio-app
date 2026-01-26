@@ -5,10 +5,9 @@ import {
     formatCurrency,
     formatCurrencyNoDecimals,
     formatNumber2
-} from '../../utils'; // Adjust path if utils is not in ../../
+} from '../../utils'; 
 
 const TaxReportView = ({ taxYear, settings, calc }) => {
-    // Ensure default values exist for new loss fields
     const r = calc.reports[taxYear] || {
         rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0, withheldTax: 0,
         askGain: 0, askTax: 0, paidTax: 0, paidAskTax: 0, breakdown: { stocks: [], etfs: [], dividends: [] },
@@ -25,7 +24,7 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
     const taxableIncome = Math.max(0, shareIncome - r.utilizedLossNormal);
 
     // Tax Limits (27% bracket limit)
-    const limitBase = TAX_LIMITS[taxYear];
+    const limitBase = TAX_LIMITS[taxYear] || 50000;
     const limitActual = limitBase * (settings.married ? 2 : 1);
 
     let taxBill = calculateDanishTax(taxableIncome, limitActual);
@@ -37,16 +36,27 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
     const taxToPay = Math.max(0, taxBill - (r.withheldTax || 0) - (r.paidTax || 0));
     const askTaxToPay = Math.max(0, (r.askTax || 0) - (r.paidAskTax || 0));
 
-    // --- Additional Planning Metrics (27% bracket & years to sell off) ---
+    // --- UNREALIZED GAINS PLANNING (Using Engine Data) ---
+    // The engine provides 'unrealizedStockGain' which is strictly (Value - Cost) for realization-taxed stocks.
     const unrealized = calc.unrealizedStockGain || 0;
+    
+    // "Ekstra Skat" is the calculated tax liability if you sold everything today.
+    // The engine calculates this as 'currentTax'
+    const extraTaxIfSoldNow = calc.currentTax || 0;
+
+    // Optimization Scenario: Spreading sales over years to stay in 27% bracket
     const remaining27Room = Math.max(0, limitActual - taxableIncome);
-    const optimalLiquidationTax = Math.max(0, unrealized) * 0.27; // Simplified: all realized under 27% over several years
+    
+    // Simple math: If we could realize ALL of it at 27%, what would the tax be?
+    // Note: This ignores ASK tax (17%), but 'unrealized' here usually refers to Stocks anyway.
+    const optimalLiquidationTax = Math.max(0, unrealized) * 0.27; 
+
     const yearsToSellAll = (() => {
         if (unrealized <= 0) return 0;
-        if (remaining27Room >= unrealized) return 1; // all within this year's 27% bracket
+        if (remaining27Room >= unrealized) return 1; 
         const remainingAfterThisYear = unrealized - remaining27Room;
         const extraYears = Math.ceil(remainingAfterThisYear / limitActual);
-        return 1 + extraYears; // current year + future years
+        return 1 + extraYears; 
     })();
 
     return (
@@ -57,8 +67,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
 
                 {/* LEFT: NORMAL TAX (Frie Midler) */}
                 <div className="card flex flex-col h-full relative overflow-hidden">
-
-                    {/* 1. Header & Hero Value */}
                     <div className="flex justify-between items-end mb-2">
                         <div>
                             <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
@@ -71,12 +79,9 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                             </div>
                         </div>
                     </div>
-                    {/* 2. Minimalist Single-Line Bar */}
+                    {/* Minimalist Single-Line Bar */}
                     <div className="mb-8 flex items-center gap-3">
-                        {/* The Bar Track */}
                         <div className="relative h-2.5 flex-1 bg-slate-100 rounded-full overflow-hidden">
-
-                            {/* Safe Zone (Blue) */}
                             <div
                                 className="absolute top-0 left-0 h-full bg-blue-600 transition-all duration-500 ease-out"
                                 style={{
@@ -84,20 +89,15 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                                     zIndex: 2
                                 }}
                             />
-
-                            {/* Danger Zone (Orange) - Appears if limit exceeded */}
                             {taxableIncome > limitActual && (
                                 <div
                                     className="absolute top-0 left-0 h-full bg-orange-500 transition-all duration-500 ease-out"
                                     style={{
                                         width: '100%',
-                                        // Visual trick: Clip the left side based on where the limit is
                                         clipPath: `inset(0 0 0 ${Math.min(100, (limitActual / taxableIncome) * 100)}%)`
                                     }}
                                 />
                             )}
-
-                            {/* Subtle white separator line to mark the 27/42 cut-off point */}
                             <div
                                 className="absolute top-0 bottom-0 w-[2px] bg-white z-10 opacity-50 mix-blend-overlay"
                                 style={{
@@ -105,14 +105,11 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                                 }}
                             />
                         </div>
-
-                        {/* The Percentage Label */}
                         <span className={`text-xs font-bold font-mono min-w-[3.5rem] text-right ${taxableIncome > limitActual ? 'text-orange-500' : 'text-blue-600'}`}>
                             {taxableIncome > 0 ? ((taxBill / taxableIncome) * 100).toFixed(1) : '0.0'}%
                         </span>
                     </div>
 
-                    {/* 3. Rubrik List */}
                     <div className="space-y-3 mb-6 flex-1">
                         {[
                             { label: 'Gevinst/tab aktier', rubrik: '66', val: r.rubrik66 },
@@ -133,7 +130,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                             </div>
                         ))}
 
-                        {/* Utilized Loss */}
                         {r.utilizedLossNormal > 0 && (
                             <div className="flex justify-between items-center text-sm pt-2 text-green-700 bg-green-50 p-2 rounded border border-green-50">
                                 <div className="flex items-center gap-2">
@@ -144,7 +140,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                             </div>
                         )}
 
-                        {/* Carried Loss */}
                         {r.carriedLossNormal > 0 && shareIncome < 0 && (
                             <div className="flex justify-between items-center text-sm pt-2 text-gray-500 italic">
                                 <span>Tab til fremførsel (næste år)</span>
@@ -152,7 +147,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                             </div>
                         )}
 
-                        {/* Capital Income */}
                         {r.rubrik345 !== 0 && (
                             <div className="flex justify-between items-center text-sm pt-2 mt-2 border-t border-gray-50 border-dashed">
                                 <div className="flex items-center gap-2">
@@ -164,7 +158,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                         )}
                     </div>
 
-                    {/* 4. Summary Footer */}
                     <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-gray-50 rounded-b-xl mt-auto">
                         <div className="space-y-1 text-sm mb-3">
                             <div className="flex justify-between text-gray-500">
@@ -193,7 +186,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
 
                 {/* RIGHT: ASK (Aktiesparekonto) */}
                 <div className="card flex flex-col h-full">
-                    {/* Header */}
                     <div className="flex justify-between items-start mb-6">
                         <div>
                             <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
@@ -201,12 +193,10 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                             </h3>
                         </div>
                         <div className="text-right">
-                            {/* Taxable ASK is Gain - Utilized Loss */}
                             <div className={`text-xl font-bold ${r.askGain >= 0 ? 'text-gray-900' : 'text-red-600'}`}>{formatCurrencyNoDecimals(Math.max(0, r.askGain - r.utilizedLossAsk))}</div>
                         </div>
                     </div>
 
-                    {/* Body */}
                     <div className="flex-1">
                         {r.askGain === 0 && r.askTax === 0 && r.utilizedLossAsk === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full pb-10 text-gray-400 text-sm italic">
@@ -222,8 +212,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                                     </div>
                                     <span className="font-mono font-medium text-gray-900">{formatCurrencyNoDecimals(r.askGain)}</span>
                                 </div>
-
-                                {/* --- NEW: UTILIZED ASK LOSS --- */}
                                 {r.utilizedLossAsk > 0 && (
                                     <div className="flex justify-between items-center text-sm text-green-700 bg-green-50 p-2 rounded border border-green-50">
                                         <div className="flex items-center gap-2">
@@ -233,21 +221,16 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                                         <span className="font-mono font-bold">-{formatCurrencyNoDecimals(r.utilizedLossAsk)}</span>
                                     </div>
                                 )}
-
-                                {/* --- NEW: CARRIED ASK LOSS --- */}
                                 {r.carriedLossAsk > 0 && r.askGain < 0 && (
                                     <div className="flex justify-between items-center text-sm text-gray-500 italic pb-2">
                                         <span>Tab til fremførsel</span>
                                         <span className="font-mono">{formatCurrencyNoDecimals(r.carriedLossAsk)}</span>
                                     </div>
                                 )}
-
-
                             </div>
                         )}
                     </div>
 
-                    {/* Footer */}
                     <div className="bg-gray-50 -mx-5 -mb-5 p-5 border-t border-teal-50 rounded-b-xl mt-auto">
                         <div className="space-y-1 text-sm mb-3">
                             <div className="flex justify-between text-gray-500">
@@ -265,8 +248,6 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                             <span className="font-bold text-teal-900">Restskat</span>
                             <span className="font-bold text-xl text-teal-700">{formatCurrencyNoDecimals(askTaxToPay)}</span>
                         </div>
-
-
                     </div>
                 </div>
             </div>
@@ -277,7 +258,7 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                     <div className="mb-2 flex items-center justify-between">
                         <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
                             <i className="ph ph-magic-wand text-purple-600"></i>
-                            Urealiserede gevinster
+                            Urealiserede gevinster (Aktier)
                         </h3>
                         <div className="text-right">
                             <div className={`text-xl font-bold leading-none ${unrealized >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
@@ -290,7 +271,7 @@ const TaxReportView = ({ taxYear, settings, calc }) => {
                         {/* Tile: Sell Everything Now */}
                         <div className="p-4 rounded border border-gray-50 bg-white">
                             <div className="text-xs font-bold text-gray-500 uppercase">Ekstra Skat</div>
-                            <div className="mt-1 text-2xl font-bold text-purple-700">{formatCurrencyNoDecimals(calc.liquidationNormalTax)}</div>
+                            <div className="mt-1 text-2xl font-bold text-purple-700">{formatCurrencyNoDecimals(extraTaxIfSoldNow)}</div>
                         </div>
 
                         {/* Tile: Optimal Liquidation (27%) */}
