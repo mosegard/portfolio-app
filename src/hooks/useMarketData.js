@@ -1,18 +1,14 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { compressMarketData, decompressMarketData } from '../utils';
 
-// Constants
 const CACHE_KEY = 'marketDataCache_v2';
-const STALE_THRESHOLD_ACTIVE = 60 * 1000; // 60 seconds
-const STALE_THRESHOLD_INACTIVE = 24 * 60 * 60 * 1000; // 24 hours
+const STALE_THRESHOLD_ACTIVE = 60 * 1000; 
+const STALE_THRESHOLD_INACTIVE = 24 * 60 * 60 * 1000; 
 
 export default function useMarketData(txs, settings, uniqueTickers) {
-    const [marketData, setMarketData] = useState({});
-    const [loading, setLoading] = useState(false);
-    const [lastUpdate, setLastUpdate] = useState(null);
-
-    // 1. Load & Decompress on Mount
-    useEffect(() => {
+    
+    // 1. LAZY INITIALIZATION (Fixed Mapping)
+    const [marketData, setMarketData] = useState(() => {
         try {
             const raw = localStorage.getItem(CACHE_KEY);
             if (raw) {
@@ -21,31 +17,45 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                 
                 Object.keys(compressedStore).forEach(ticker => {
                     const item = compressedStore[ticker];
-                    inflated[ticker] = {
-                        ...item,
-                        history: decompressMarketData(item.h),
-                        lastUpdated: item.u
-                    };
+                    if (item && item.h) {
+                        inflated[ticker] = {
+                            // We must manually map the short keys back to long keys
+                            // so the UI can find them immediately
+                            history: decompressMarketData(item.h),
+                            lastUpdated: item.u || Date.now(),
+                            currency: item.c,           // Map c -> currency
+                            price: item.p,              // Map p -> price
+                            previousClose: item.pc,     // Map pc -> previousClose
+                            lastTradeTime: item.lt,     // Map lt -> lastTradeTime
+                            ...item // Spread the rest just in case
+                        };
+                    }
                 });
-                
-                setMarketData(inflated);
-                
-                const times = Object.values(inflated).map(d => d.lastUpdated).filter(t => t > 0);
-                if (times.length) setLastUpdate(new Date(Math.max(...times)));
+                console.log(`[MarketData] Loaded ${Object.keys(inflated).length} tickers from cache.`);
+                return inflated;
             }
         } catch (e) {
-            console.error("Cache load failed", e);
+            console.error("[MarketData] Cache load failed", e);
         }
-    }, []);
+        return {};
+    });
 
-    // 2. Safe Storage with Eviction Policy (NOW MEMOIZED)
+    const [loading, setLoading] = useState(false);
+
+    // 2. DERIVED STATE
+    const lastUpdate = useMemo(() => {
+        const times = Object.values(marketData)
+            .map(d => d.lastUpdated)
+            .filter(t => t > 0);
+        return times.length ? new Date(Math.max(...times)) : null;
+    }, [marketData]);
+
+    // 3. Save Helper
     const saveToCache = useCallback((newDataMap) => {
         try {
-            // Load current compressed state (source of truth)
             const raw = localStorage.getItem(CACHE_KEY);
             let store = raw ? JSON.parse(raw) : {};
 
-            // Merge new data
             Object.keys(newDataMap).forEach(ticker => {
                 store[ticker] = newDataMap[ticker];
             });
@@ -54,42 +64,28 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                 localStorage.setItem(CACHE_KEY, JSON.stringify(store));
             } catch (e) {
                 if (e.name === 'QuotaExceededError') {
-                    console.warn("Storage full! Evicting old inactive tickers...");
-                    
-                    // Identify Active Tickers
-                    const activeTickers = new Set(uniqueTickers);
-                    if (settings.benchmarkTicker) activeTickers.add(settings.benchmarkTicker);
-
-                    // Sort by Last Updated (Oldest first)
-                    const sortedKeys = Object.keys(store).sort((a, b) => {
-                        return (store[a].u || 0) - (store[b].u || 0);
-                    });
-
-                    let freed = false;
-                    for (const key of sortedKeys) {
-                        // Don't delete active tickers or currency pairs
-                        if (!activeTickers.has(key) && !key.includes('DKK=X')) {
+                    const activeSet = new Set([...uniqueTickers, settings.benchmarkTicker]);
+                    const keys = Object.keys(store);
+                    for (const key of keys) {
+                        if (!activeSet.has(key) && !key.includes('DKK=X')) {
                             delete store[key];
-                            freed = true;
-                            try {
-                                localStorage.setItem(CACHE_KEY, JSON.stringify(store));
-                                console.log(`Evicted ${key} to save space.`);
-                                break; 
-                            } catch (e2) { continue; }
                         }
                     }
-                    
-                    if (!freed) console.error("Cache is full and only contains active tickers.");
+                    localStorage.setItem(CACHE_KEY, JSON.stringify(store));
                 }
             }
         } catch (err) {
-            console.error("Critical cache error", err);
+            console.error("[MarketData] Save failed", err);
         }
-    }, [uniqueTickers, settings.benchmarkTicker]); // <--- Dependencies for saveToCache
+    }, [uniqueTickers, settings.benchmarkTicker]);
 
-    // 3. The Fetcher
+    // 4. Fetch Logic
     const fetchMarketData = useCallback(async (force = false) => {
-        // Calculate current holdings
+        // ... (This logic determines which tickers are needed) ...
+        // ... (Keep the logic exactly as it was in the previous file) ...
+        
+        // REPEATING logic for context (you can copy/paste your existing logic here)
+        // The important part is constructing the list of tickers
         const currentHoldings = new Set();
         const holdingMap = {};
         txs.forEach(t => {
@@ -107,8 +103,12 @@ export default function useMarketData(txs, settings, uniqueTickers) {
         const usedCurrencies = [...new Set(txs.map(t => t.currency).filter(c => c && c !== 'DKK'))];
         usedCurrencies.forEach(c => activeSet.add(`${c}DKK=X`));
 
-        const allTickers = [...uniqueTickers, ...usedCurrencies.map(c => `${c}DKK=X`), ...((settings.benchmarkTicker ? [settings.benchmarkTicker] : []))];
-        const uniqueList = [...new Set(allTickers)];
+        const allTickers = [
+            ...uniqueTickers, 
+            ...usedCurrencies.map(c => `${c}DKK=X`), 
+            ...((settings.benchmarkTicker ? [settings.benchmarkTicker] : []))
+        ];
+        const uniqueList = [...new Set(allTickers)].filter(Boolean);
 
         if (uniqueList.length === 0) return;
 
@@ -122,6 +122,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
             const isActive = activeSet.has(ticker);
             
             let shouldFetch = false;
+            // FIX: Ensure force actually forces
             if (force) shouldFetch = true;
             else if (!cachedItem) shouldFetch = true;
             else if (isActive && age > STALE_THRESHOLD_ACTIVE) shouldFetch = true;
@@ -132,10 +133,15 @@ export default function useMarketData(txs, settings, uniqueTickers) {
             }
         });
 
-        if (targets.length === 0) return;
+        if (targets.length === 0) {
+            console.log("[MarketData] All data is fresh.");
+            return;
+        }
 
+        console.log(`[MarketData] Fetching ${targets.length} tickers...`, targets.map(t => t.ticker));
         setLoading(true);
 
+        // ... (Keep the rest of the fetch/Yahoo logic exactly as before) ...
         const nowSec = Math.floor(Date.now() / 1000);
         let globalStart = nowSec - (2 * 365 * 24 * 60 * 60); 
         if (txs.length > 0) {
@@ -162,7 +168,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                     const result = json.chart.result[0];
                     const meta = result.meta;
                     const quotes = result.indicators.quote[0];
-                    const dates = result.timestamp;
+                    const dates = result.timestamp || [];
 
                     const cleanHistory = dates.map((t, i) => ({
                         date: new Date(t * 1000).toISOString().split('T')[0],
@@ -198,7 +204,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
 
                     newInflatedData[ticker] = {
                         history: cleanHistory,
-                        currency: meta.currency,
+                        currency: meta.currency, // Ensure these keys match the inflated mapping above
                         price: livePrice,
                         previousClose: prevClose,
                         lastTradeTime: lastTradeTime,
@@ -206,21 +212,17 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                     };
                 }
             } catch (e) {
-                console.warn(`Failed to fetch ${ticker}`, e);
+                console.warn(`[MarketData] Failed to fetch ${ticker}`, e);
             }
         }));
 
         if (Object.keys(newInflatedData).length > 0) {
             setMarketData(prev => ({ ...prev, ...newInflatedData }));
-            setLastUpdate(new Date());
-            
-            // This is now safe because saveToCache is memoized
             saveToCache(newCompressedData);
         }
-
         setLoading(false);
 
-    }, [txs, settings, uniqueTickers, marketData, saveToCache]); // <--- Added saveToCache
+    }, [txs, settings, uniqueTickers, marketData, saveToCache]);
 
     return { marketData, loading, lastUpdate, fetchMarketData };
 }

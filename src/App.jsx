@@ -42,7 +42,7 @@ function App() {
     const [filterAccount, setFilterAccount] = useState('All');
     const [taxYear, setTaxYear] = useState(new Date().getFullYear().toString());
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
-const [showCacheInspector, setShowCacheInspector] = useState(false);
+    const [showCacheInspector, setShowCacheInspector] = useState(false);
 
     const [settings, setSettings] = usePersistentState('portfolio_settings', {
         proxyUrl: 'https://corsproxy.io/?',
@@ -476,7 +476,7 @@ const [showCacheInspector, setShowCacheInspector] = useState(false);
                     {/* 3. RIGHT: Single Unified Update Button */}
                     <div className="flex items-center gap-2">
                         <button
-                            onClick={() => fetchMarketData(false)}
+                            onClick={() => fetchMarketData(true)}
                             className="p-2 w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-blue-50 text-blue-600 text-lg shadow-sm flex items-center justify-center"
                             title={lastUpdate ? `Sidst opdateret: ${lastUpdate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : "Opdater priser"}
                         >

@@ -1,17 +1,16 @@
-import React, { useState, useEffect } from 'react';
+// Add useCallback to the import
+import React, { useState, useEffect, useCallback } from 'react';
 import { formatCurrency } from '../../utils';
 
-const CACHE_KEY = 'marketDataCache_v2'; // Must match useMarketData.js
+const CACHE_KEY = 'marketDataCache_v2'; 
 
 const CacheInspectorView = ({ onClose }) => {
     const [cacheData, setCacheData] = useState({});
     const [cacheSize, setCacheSize] = useState(0);
 
-    useEffect(() => {
-        loadCache();
-    }, []);
-
-    const loadCache = () => {
+    // 1. Define loadCache FIRST, wrapped in useCallback
+    // Dependency array is empty [] because it only uses internal state setters or constants
+    const loadCache = useCallback(() => {
         try {
             const raw = localStorage.getItem(CACHE_KEY) || '{}';
             // Calculate size in KB
@@ -21,26 +20,32 @@ const CacheInspectorView = ({ onClose }) => {
         } catch (e) {
             console.error("Failed to load cache", e);
         }
-    };
+    }, []);
+
+    // 2. useEffect can now safely reference loadCache
+    useEffect(() => {
+        loadCache();
+    }, [loadCache]); // Safe to add as dependency now because useCallback keeps it stable
 
     const deleteTicker = (ticker) => {
         if (!confirm(`Delete cache for ${ticker}?`)) return;
         const newCache = { ...cacheData };
         delete newCache[ticker];
         localStorage.setItem(CACHE_KEY, JSON.stringify(newCache));
-        loadCache(); // Refresh UI
+        loadCache(); 
     };
 
     const clearAll = () => {
         if (!confirm("ARE YOU SURE? This will delete ALL market data prices.")) return;
         localStorage.removeItem(CACHE_KEY);
         loadCache();
-        window.location.reload(); // Reload to force app to re-fetch
+        window.location.reload(); 
     };
 
     const sortedKeys = Object.keys(cacheData).sort();
 
     return (
+        // ... (Rest of your JSX remains exactly the same)
         <div className="fixed inset-0 z-50 bg-gray-100 flex flex-col p-6 animate-in slide-in-from-bottom-10">
             {/* Header */}
             <div className="flex justify-between items-center mb-6">
@@ -80,7 +85,6 @@ const CacheInspectorView = ({ onClose }) => {
                         <tbody className="divide-y divide-gray-100">
                             {sortedKeys.map(ticker => {
                                 const item = cacheData[ticker];
-                                // V2 Format: u = updated, p = price, h = history array
                                 const date = item.u ? new Date(item.u).toLocaleString() : 'Unknown';
                                 const price = item.p || 0;
                                 const points = item.h ? item.h.length : 0;
