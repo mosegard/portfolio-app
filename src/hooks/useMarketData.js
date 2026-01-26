@@ -7,7 +7,7 @@ const STALE_THRESHOLD_INACTIVE = 24 * 60 * 60 * 1000;
 
 export default function useMarketData(txs, settings, uniqueTickers) {
     
-    // 1. LAZY INITIALIZATION (Fixed Mapping)
+    // 1. LAZY INITIALIZATION
     const [marketData, setMarketData] = useState(() => {
         try {
             const raw = localStorage.getItem(CACHE_KEY);
@@ -19,15 +19,13 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                     const item = compressedStore[ticker];
                     if (item && item.h) {
                         inflated[ticker] = {
-                            // We must manually map the short keys back to long keys
-                            // so the UI can find them immediately
                             history: decompressMarketData(item.h),
                             lastUpdated: item.u || Date.now(),
-                            currency: item.c,           // Map c -> currency
-                            price: item.p,              // Map p -> price
-                            previousClose: item.pc,     // Map pc -> previousClose
-                            lastTradeTime: item.lt,     // Map lt -> lastTradeTime
-                            ...item // Spread the rest just in case
+                            currency: item.c,           
+                            price: item.p,              
+                            previousClose: item.pc,     
+                            lastTradeTime: item.lt,     
+                            ...item 
                         };
                     }
                 });
@@ -81,11 +79,6 @@ export default function useMarketData(txs, settings, uniqueTickers) {
 
     // 4. Fetch Logic
     const fetchMarketData = useCallback(async (force = false) => {
-        // ... (This logic determines which tickers are needed) ...
-        // ... (Keep the logic exactly as it was in the previous file) ...
-        
-        // REPEATING logic for context (you can copy/paste your existing logic here)
-        // The important part is constructing the list of tickers
         const currentHoldings = new Set();
         const holdingMap = {};
         txs.forEach(t => {
@@ -122,7 +115,6 @@ export default function useMarketData(txs, settings, uniqueTickers) {
             const isActive = activeSet.has(ticker);
             
             let shouldFetch = false;
-            // FIX: Ensure force actually forces
             if (force) shouldFetch = true;
             else if (!cachedItem) shouldFetch = true;
             else if (isActive && age > STALE_THRESHOLD_ACTIVE) shouldFetch = true;
@@ -141,7 +133,6 @@ export default function useMarketData(txs, settings, uniqueTickers) {
         console.log(`[MarketData] Fetching ${targets.length} tickers...`, targets.map(t => t.ticker));
         setLoading(true);
 
-        // ... (Keep the rest of the fetch/Yahoo logic exactly as before) ...
         const nowSec = Math.floor(Date.now() / 1000);
         let globalStart = nowSec - (2 * 365 * 24 * 60 * 60); 
         if (txs.length > 0) {
@@ -175,15 +166,16 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                         close: quotes.close[i] ? Number(quotes.close[i].toFixed(2)) : null
                     })).filter(x => x.close != null);
 
-                    let livePrice = meta.regularMarketPrice;
-                    let lastTradeTime = meta.regularMarketTime;
-                    if (meta.postMarketPrice && meta.postMarketTime > lastTradeTime) {
-                        livePrice = meta.postMarketPrice; lastTradeTime = meta.postMarketTime;
-                    } else if (meta.preMarketPrice && meta.preMarketTime > lastTradeTime) {
-                        livePrice = meta.preMarketPrice; lastTradeTime = meta.preMarketTime;
-                    }
+                    // --- STRICT REGULAR MARKET LOGIC ---
+                    // We now strictly use regularMarketPrice.
+                    // No checks for postMarket or preMarket.
+                    const livePrice = meta.regularMarketPrice;
+                    const lastTradeTime = meta.regularMarketTime;
 
                     let prevClose = meta.chartPreviousClose || meta.previousClose;
+                    
+                    // Logic to ensure "History" doesn't duplicate "Today"
+                    // If Yahoo returns today's candle in history, use the one before it as prevClose
                     if (cleanHistory.length >= 2) {
                          const lastCandle = cleanHistory[cleanHistory.length - 1];
                          const secondLastCandle = cleanHistory[cleanHistory.length - 2];
@@ -204,7 +196,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
 
                     newInflatedData[ticker] = {
                         history: cleanHistory,
-                        currency: meta.currency, // Ensure these keys match the inflated mapping above
+                        currency: meta.currency,
                         price: livePrice,
                         previousClose: prevClose,
                         lastTradeTime: lastTradeTime,

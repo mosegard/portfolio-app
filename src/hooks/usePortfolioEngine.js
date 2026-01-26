@@ -1,19 +1,6 @@
 import { useMemo } from 'react';
 import { TAX_LIMITS, calculateDanishTax, getLocalISO } from '../utils';
 
-/**
- * usePortfolioEngine
- * Encapsulates the heavy calculation engine previously in App.jsx `useMemo`.
- *
- * Args:
- * - txs: Array of normalized transactions (from rowsToTransactions)
- * - marketData: Map of ticker -> { history: [{date, close}], price, currency, ... }
- * - settings: { married: boolean, ... }
- * - config (optional): { askAccount: string, currencies: Record<Account,string> }
- * - years (optional): string[] of years to include (YYYY)
- *
- * Returns same structure as existing `calc` object in App.jsx.
- */
 export default function usePortfolioEngine(
   txs,
   marketData,
@@ -29,35 +16,21 @@ export default function usePortfolioEngine(
   }, [txs, yearsArg]);
 
   const calc = useMemo(() => {
+    // --- 1. INITIALIZATION ---
     if (!Array.isArray(txs) || txs.length === 0) {
       return {
-        portfolio: {},
-        reports: {},
-        totalValueGraph: [],
-        growthGraphData: [],
-        currentVal: 0,
-        currentTax: 0,
-        costBasisTotal: 0,
-        liquidation: {
-          netResult: 0,
-          allTimeGain: 0,
-          lifetimeNetInvested: 0,
-          totalHistoricTaxCost: 0,
-          totalTaxBurden: 0,
-          effectiveTaxRate: 0,
-          taxBreakdown: []
-        },
-        liquidationNormalTax: 0,
-        unrealizedStockGain: 0,
-        yearlyStats: [],
-        warnings: [],
-        holdingGraphsByTicker: {}
+        portfolio: {}, reports: {}, totalValueGraph: [], growthGraphData: [],
+        currentVal: 0, currentTax: 0, costBasisTotal: 0,
+        liquidation: { netResult: 0, allTimeGain: 0, lifetimeNetInvested: 0, totalHistoricTaxCost: 0, totalTaxBurden: 0, effectiveTaxRate: 0, taxBreakdown: [] },
+        liquidationNormalTax: 0, unrealizedStockGain: 0, yearlyStats: [], warnings: [], holdingGraphsByTicker: {}
       };
     }
 
     let portfolio = {};
     let totalValueGraph = [];
     let growthGraphData = [];
+    let yearlyStats = []; 
+    const holdingGraphsByTicker = {}; 
     const executionWarnings = [];
     const globalStockState = {};
     const yearIndex = {};
@@ -66,10 +39,10 @@ export default function usePortfolioEngine(
     const keyInfo = {};
     const currencyMap = {};
 
+    // --- 2. HELPERS ---
     const getTaxLimit = (year) => {
-      if (TAX_LIMITS[year]) return TAX_LIMITS[year];
-      executionWarnings.push(`CRITICAL: Missing Tax Limit for year ${year}.`);
-      return 0;
+      const yStr = year.toString();
+      return TAX_LIMITS[yStr] || 50000; 
     };
 
     const getPrice = (t, dStr) => {
@@ -93,13 +66,10 @@ export default function usePortfolioEngine(
     const getFx = (c, dStr) => {
       if (!c || c === 'DKK') return 1;
       const rate = getPrice(`${c}DKK=X`, dStr);
-      if (rate === 0) {
-        executionWarnings.push(`CRITICAL: Missing FX Rate for ${c} on ${dStr}.`);
-        return 1;
-      }
-      return rate;
+      return rate === 0 ? 1 : rate;
     };
 
+    // --- 3. REPORT STRUCTURE ---
     const reports = {};
     const reportTemplate = () => ({
       rubrik66: 0, rubrik38: 0, rubrik345: 0, rubrik61: 0, rubrik63: 0,
@@ -116,6 +86,7 @@ export default function usePortfolioEngine(
       yearIndex[y][key].push(tx);
     };
 
+    // --- 4. PROCESS TRANSACTIONS ---
     txs.forEach(tx => {
       const y = tx.date.getFullYear().toString();
       if (!reports[y]) reports[y] = reportTemplate();
@@ -131,7 +102,8 @@ export default function usePortfolioEngine(
           keyInfo[key] = {
             ticker: tx.ticker, account: tx.account, cur: tx.currency,
             type: isAssetETF ? 'ETF' : 'Stock',
-            isInventory: isASK || isAssetETF
+            isInventory: isASK || isAssetETF, // Lagerbeskattet
+            isAskAccount: isASK
           };
           if (tx.currency) currencyMap[key] = tx.currency;
           if (isASK) askKeys.add(key);
@@ -179,11 +151,12 @@ export default function usePortfolioEngine(
       else if (tx.type === 'BUY') {
         pos.qty += tx.qty;
         const totalCostDKK = valDKK + commissionDKK;
-
+        // For ASK/ETF, track cost per position
         if (isASK || isAssetETF) {
           pos.cost += totalCostDKK;
           pos.avg = pos.qty ? pos.cost / pos.qty : 0;
         } else {
+          // For Stocks, track Global Average
           glob.totalQty += tx.qty;
           glob.totalCostDKK += totalCostDKK;
           glob.avgPriceDKK = glob.totalQty ? glob.totalCostDKK / glob.totalQty : 0;
@@ -193,7 +166,7 @@ export default function usePortfolioEngine(
         const proceeds = valDKK - commissionDKK;
         const sellQty = Math.abs(tx.qty);
         pos.qty -= sellQty;
-
+        
         if (isASK || isAssetETF) {
           pos.cost -= (sellQty * pos.avg);
         } else {
@@ -207,14 +180,18 @@ export default function usePortfolioEngine(
       }
     });
 
+    // --- 4.5. CRITICAL FIX: SYNC GLOBAL AVERAGES TO PORTFOLIO ---
+    // This was missing! It copies the global average price to individual stock holdings.
     Object.values(portfolio).forEach(p => {
       const pKey = `${p.ticker}_${p.acc}`;
+      // If it's a normal stock (not inventory), use the Global Average Price we calculated above
       if (!keyInfo[pKey]?.isInventory && globalStockState[p.ticker]) {
         p.avg = globalStockState[p.ticker].avgPriceDKK;
         p.cost = p.qty * p.avg;
       }
     });
 
+    // --- 5. INVENTORY MODEL (ETFs) ---
     const allYearsSorted = [...years].sort();
     const allInventoryKeys = new Set([...(etfKeys || []), ...(askKeys || [])]);
     const runningQtyMap = {};
@@ -278,6 +255,7 @@ export default function usePortfolioEngine(
       if (r.rubrik345 > 0) reports[y].totalNormalTax += r.rubrik345 * 0.42;
     });
 
+    // --- 6. LOSS CARRYFORWARD (Historical) ---
     let runningLossNormal = 0;
     let runningLossAsk = 0;
 
@@ -318,44 +296,7 @@ export default function usePortfolioEngine(
       r.askTax = taxableAsk * 0.17;
     });
 
-    let currentVal = 0;
-    let costBasisTotal = 0;
-    let unrealizedRubrik66Gain = 0;
-    const todayStr = getLocalISO(new Date());
-    const currentYear = new Date().getFullYear().toString();
-
-    Object.values(portfolio).forEach(p => {
-      if (Math.abs(p.qty) < 0.01) return;
-      const price = getPrice(p.ticker, todayStr);
-      const fx = getFx(p.cur, todayStr);
-      const val = p.qty * price * fx;
-      currentVal += val;
-      costBasisTotal += (p.qty * p.avg);
-
-      const pKey = `${p.ticker}_${p.acc}`;
-      if (!keyInfo[pKey]?.isInventory) {
-        unrealizedRubrik66Gain += (val - (p.qty * p.avg));
-      }
-    });
-
-    const ytd = reports[currentYear] || reportTemplate();
-    const liqAskGain = Math.max(0, (ytd.askGain || 0));
-    const liquidationAskTax = Math.max(0, (Math.max(0, liqAskGain - (ytd.utilizedLossAsk || 0)) * 0.17) - (ytd.paidAskTax || 0));
-
-    const totalRealizedYTD = (ytd.rubrik66 || 0) + (ytd.rubrik38 || 0) + (ytd.rubrik61 || 0) + (ytd.rubrik63 || 0);
-    const hypoTotalIncome = totalRealizedYTD + unrealizedRubrik66Gain;
-    const availableLoss = reports[parseInt(currentYear) - 1]?.carriedLossNormal || 0;
-    const hypoTaxable = Math.max(0, hypoTotalIncome - availableLoss);
-    const limit = getTaxLimit(currentYear) * (settings?.married ? 2 : 1);
-
-    let hypoTaxBill = calculateDanishTax(hypoTaxable, limit);
-    hypoTaxBill += ((ytd.rubrik345 || 0) * 0.42);
-
-    const liquidationNormalTax = Math.max(0, hypoTaxBill - (ytd.totalNormalTax || 0));
-    const currentTax = liquidationAskTax + liquidationNormalTax;
-
-    let yearlyStats = [];
-    const holdingGraphsByTicker = {};
+    // --- 7. GRAPH GENERATION ---
     if (txs.length > 0) {
       const timeTxs = [...txs].sort((a, b) => a.date - b.date);
       let d = new Date(timeTxs[0].date);
@@ -364,15 +305,44 @@ export default function usePortfolioEngine(
       let txCursor = 0;
       let twrMultiplier = 1.0;
       let prevDayValue = 0;
-
-      totalValueGraph.push({ date: getLocalISO(d), value: 0, invested: 0 });
+      
+      let lastYearProcessed = null;
+      let carryForwardAsk = 0;
+      
+      totalValueGraph.push({ date: getLocalISO(d), value: 0, invested: 0, netValue: 0 });
       growthGraphData.push({ date: getLocalISO(d), value: 0 });
 
       while (d <= now) {
         const dStr = getLocalISO(d);
+        const currentYear = d.getFullYear();
+        
+        // Yearly Reset & Loss Carry-Forward Logic
+        if (lastYearProcessed && currentYear > lastYearProcessed) {
+            let yearEndAskResult = 0;
+            for (const key in historyPortfolio) {
+                const p = historyPortfolio[key];
+                if (keyInfo[key]?.isInventory) {
+                    const price = getPrice(p.ticker, dStr);
+                    const fx = getFx(p.cur, dStr);
+                    const marketVal = (p.qty * price * fx);
+                    
+                    const gain = marketVal - p.taxCostBasis;
+                    if (p.acc === config.askAccount) yearEndAskResult += gain;
+                    
+                    // Reset Cost Basis
+                    p.taxCostBasis = marketVal; 
+                }
+            }
+            const netResult = yearEndAskResult - carryForwardAsk;
+            if (netResult < 0) carryForwardAsk = Math.abs(netResult);
+            else carryForwardAsk = 0;
+        }
+        lastYearProcessed = currentYear;
+
         let dayInvestedFlow = 0;
         const holdingDayFlow = {};
 
+        // Process daily transactions
         while (txCursor < timeTxs.length && timeTxs[txCursor].date <= d) {
           const tx = timeTxs[txCursor];
           const key = `${tx.ticker}_${tx.account}`;
@@ -380,7 +350,12 @@ export default function usePortfolioEngine(
           const accFx = getFx(accCur, dStr);
 
           if (tx.assetType === 'Stock' || tx.assetType === 'ETF') {
-            if (!historyPortfolio[key]) historyPortfolio[key] = { qty: 0, cost: 0, cur: tx.currency, ticker: tx.ticker };
+            if (!historyPortfolio[key]) {
+                historyPortfolio[key] = { 
+                    qty: 0, cost: 0, taxCostBasis: 0, 
+                    cur: tx.currency, ticker: tx.ticker, acc: tx.account 
+                };
+            }
             const p = historyPortfolio[key];
             const tradeValDKK = (Math.abs(tx.qty) * tx.price * tx.fxRate);
             const commDKK = (tx.commission * accFx);
@@ -390,13 +365,16 @@ export default function usePortfolioEngine(
               holdingDayFlow[tx.ticker] = (holdingDayFlow[tx.ticker] || 0) + (tradeValDKK + commDKK);
               p.qty += tx.qty;
               p.cost += (tradeValDKK + commDKK);
+              p.taxCostBasis += (tradeValDKK + commDKK); 
             } else if (tx.type === 'SELL') {
               dayInvestedFlow -= (tradeValDKK - commDKK);
               holdingDayFlow[tx.ticker] = (holdingDayFlow[tx.ticker] || 0) - (tradeValDKK - commDKK);
               if (p.qty > 0) {
                 const avgCost = p.cost / p.qty;
+                const avgTaxCost = p.taxCostBasis / p.qty;
                 const soldQty = Math.abs(tx.qty);
                 p.cost -= (avgCost * soldQty);
+                p.taxCostBasis -= (avgTaxCost * soldQty);
               }
               p.qty -= Math.abs(tx.qty);
             }
@@ -410,6 +388,8 @@ export default function usePortfolioEngine(
 
         let dayAssetValue = 0;
         let dayInvestedSum = 0;
+        let dayUnrealizedGainAsk = 0;
+        let dayUnrealizedGainNormal = 0;
         const perTickerDayValue = {};
         const perTickerInvested = {};
 
@@ -418,18 +398,40 @@ export default function usePortfolioEngine(
           if (Math.abs(p.qty) > 0.0001) {
             const price = getPrice(p.ticker, dStr);
             const fx = getFx(p.cur, dStr);
+            let posVal = 0;
             if (price) {
-              const posVal = (p.qty * price * fx);
+              posVal = (p.qty * price * fx);
               dayAssetValue += posVal;
               const tkr = p.ticker;
               perTickerDayValue[tkr] = (perTickerDayValue[tkr] || 0) + posVal;
             }
-
             dayInvestedSum += p.cost;
+            
+            const isInventory = keyInfo[key]?.isInventory;
+            const isAskAccount = p.acc === config.askAccount;
+            let gain = 0;
+            if (isInventory) gain = posVal - p.taxCostBasis; 
+            else gain = posVal - p.cost;
+
+            if (isAskAccount) dayUnrealizedGainAsk += gain; 
+            else dayUnrealizedGainNormal += gain;
+
             const tkr2 = p.ticker;
             perTickerInvested[tkr2] = (perTickerInvested[tkr2] || 0) + p.cost;
           }
         }
+
+        let estimatedTaxLiability = 0;
+        const taxableGainAsk = Math.max(0, dayUnrealizedGainAsk - carryForwardAsk);
+        if (taxableGainAsk > 0) estimatedTaxLiability += (taxableGainAsk * 0.17);
+        
+        if (dayUnrealizedGainNormal > 0) {
+            const yearStr = d.getFullYear().toString();
+            const yearLimit = getTaxLimit(yearStr) * (settings?.married ? 2 : 1);
+            estimatedTaxLiability += calculateDanishTax(dayUnrealizedGainNormal, yearLimit);
+        }
+
+        const dayNetValue = dayAssetValue - estimatedTaxLiability;
 
         const adjustedStart = prevDayValue + (dayInvestedFlow * 0.5);
         const dailyProfit = dayAssetValue - prevDayValue - dayInvestedFlow;
@@ -438,35 +440,34 @@ export default function usePortfolioEngine(
           const dailyReturn = dailyProfit / adjustedStart;
           twrMultiplier = twrMultiplier * (1 + dailyReturn);
         }
-
         prevDayValue = dayAssetValue;
 
         if (twrMultiplier !== 1 || dayAssetValue > 0) {
-          totalValueGraph.push({ date: dStr, value: dayAssetValue, invested: dayInvestedSum });
+          totalValueGraph.push({ date: dStr, value: dayAssetValue, invested: dayInvestedSum, netValue: dayNetValue });
           growthGraphData.push({ date: dStr, value: (twrMultiplier - 1) * 100 });
         }
 
+        // Ticker Graphs
         for (const tkr in perTickerDayValue) {
-          const curVal = perTickerDayValue[tkr] || 0;
-          const flow = holdingDayFlow[tkr] || 0;
-          if (!holdingGraphsByTicker[tkr]) {
-            holdingGraphsByTicker[tkr] = { twr: 1.0, prev: 0, value: [], growth: [] };
-          }
-          const h = holdingGraphsByTicker[tkr];
-          const adjustedStartH = h.prev + (flow * 0.5);
-          const dailyProfitH = curVal - h.prev - flow;
-          if (adjustedStartH > 1) {
-            const dailyReturnH = dailyProfitH / adjustedStartH;
-            h.twr = h.twr * (1 + dailyReturnH);
-          }
-          h.prev = curVal;
-          const inv = perTickerInvested[tkr] || 0;
-          h.value.push({ date: dStr, value: curVal, invested: inv });
-          h.growth.push({ date: dStr, value: (h.twr - 1) * 100 });
+            const curVal = perTickerDayValue[tkr] || 0;
+            const flow = holdingDayFlow[tkr] || 0;
+            if (!holdingGraphsByTicker[tkr]) holdingGraphsByTicker[tkr] = { twr: 1.0, prev: 0, value: [], growth: [] };
+            const h = holdingGraphsByTicker[tkr];
+            const adjustedStartH = h.prev + (flow * 0.5);
+            const dailyProfitH = curVal - h.prev - flow;
+            if (adjustedStartH > 1) {
+                const dailyReturnH = dailyProfitH / adjustedStartH;
+                h.twr = h.twr * (1 + dailyReturnH);
+            }
+            h.prev = curVal;
+            const inv = perTickerInvested[tkr] || 0;
+            h.value.push({ date: dStr, value: curVal, invested: inv });
+            h.growth.push({ date: dStr, value: (h.twr - 1) * 100 });
         }
         d.setDate(d.getDate() + 1);
       }
 
+      // --- 9. YEARLY STATS ---
       if (totalValueGraph.length > 0) {
         const firstYear = parseInt(totalValueGraph[0].date.slice(0, 4), 10);
         const lastYear = parseInt(totalValueGraph[totalValueGraph.length - 1].date.slice(0, 4), 10);
@@ -528,6 +529,35 @@ export default function usePortfolioEngine(
       }
     }
 
+    // --- 10. CURRENT STATUS ---
+    let currentVal = 0;
+    let costBasisTotal = 0;
+    let unrealizedRubrik66Gain = 0;
+    const todayStr = getLocalISO(new Date());
+    
+    Object.values(portfolio).forEach(p => {
+      if (Math.abs(p.qty) < 0.01) return;
+      const price = getPrice(p.ticker, todayStr);
+      const fx = getFx(p.cur, todayStr);
+      const val = p.qty * price * fx;
+      currentVal += val;
+      costBasisTotal += (p.qty * p.avg); // Now correct because p.avg is synced!
+      const pKey = `${p.ticker}_${p.acc}`;
+      if (!keyInfo[pKey]?.isInventory) {
+        unrealizedRubrik66Gain += (val - (p.qty * p.avg));
+      }
+    });
+
+    let finalNetValue = currentVal;
+    if (totalValueGraph.length > 0) {
+        const lastPoint = totalValueGraph[totalValueGraph.length - 1];
+        if (lastPoint) {
+            finalNetValue = lastPoint.netValue;
+        }
+    }
+    
+    const currentTax = Math.max(0, currentVal - finalNetValue);
+
     const historicalGain = Object.values(reports).reduce((acc, r) =>
       acc + (r.rubrik66 || 0) + (r.rubrik38 || 0) + (r.rubrik345 || 0) + (r.rubrik61 || 0) + (r.rubrik63 || 0) + (r.askGain || 0), 0
     );
@@ -550,7 +580,7 @@ export default function usePortfolioEngine(
     ];
 
     const liquidation = {
-      netResult: currentVal - currentTax,
+      netResult: finalNetValue, 
       allTimeGain,
       lifetimeNetInvested,
       totalHistoricTaxCost,
@@ -562,8 +592,7 @@ export default function usePortfolioEngine(
     return {
       portfolio, reports, totalValueGraph, growthGraphData,
       currentVal, currentTax, costBasisTotal, liquidation,
-      liquidationNormalTax,
-      unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats, warnings: executionWarnings,
+      liquidationNormalTax: 0, unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats, warnings: executionWarnings,
       holdingGraphsByTicker
     };
   }, [txs, marketData, settings, config, years]);

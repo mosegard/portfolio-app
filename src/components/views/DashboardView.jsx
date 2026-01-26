@@ -1,25 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
     AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-    CartesianGrid, ReferenceLine, ReferenceArea, ComposedChart, Scatter
+    CartesianGrid, ReferenceLine, ReferenceArea
 } from 'recharts';
 import ModalPortal from '../ModalPortal';
 import {
     formatCurrency,
     formatCurrencyNoDecimals,
-    formatNumber2,
     getLocalISO
 } from '../../utils';
 
 const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketData, uniqueTickers, years }) => {
-    // --- Local State (Moved from App.jsx) ---
+    // --- Local State ---
     const [graphRange, setGraphRange] = useState('ALL');
     const [customRange, setCustomRange] = useState({ startIso: '', endIso: '' });
     const [chartSelection, setChartSelection] = useState({ start: null, end: null, chart: null, dragging: false });
     const [fullscreenChart, setFullscreenChart] = useState(null);
     const [selectedTickers, setSelectedTickers] = useState([]);
     
-    // Modals local to Dashboard
+    // Modals
     const [showMoversModal, setShowMoversModal] = useState(false);
     const [showLiquidationModal, setShowLiquidationModal] = useState(false);
     const [showAllocationModal, setShowAllocationModal] = useState(false);
@@ -56,14 +55,6 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
         const prevVal = p.qty * prevClose * fxRate;
         return { val, prevVal, price, prevClose, fxRate };
     };
-
-    // --- Resize Logic ---
-    const [winSize, setWinSize] = useState({ w: window.innerWidth, h: window.innerHeight });
-    useEffect(() => {
-        const onResize = () => setWinSize({ w: window.innerWidth, h: window.innerHeight });
-        window.addEventListener('resize', onResize);
-        return () => window.removeEventListener('resize', onResize);
-    }, []);
 
     // --- Drag Logic ---
     useEffect(() => {
@@ -291,7 +282,15 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
 
     // Chart Formatters
     const toUnix = (dateStr) => new Date(dateStr).getTime();
-    const numericValueData = displayValueData.map(d => ({ ...d, date: toUnix(d.date) }));
+    
+    // --- CORRECTED MAPPING ---
+    // We strictly use the netValue provided by usePortfolioEngine
+    const numericValueData = displayValueData.map(d => ({ 
+        ...d, 
+        date: toUnix(d.date),
+        netValue: d.netValue !== undefined ? d.netValue : d.value 
+    }));
+
     const numericGrowthData = mergedGrowthData.map(d => ({ ...d, date: toUnix(d.date) }));
 
     const formatAxisDate = (dateStr) => {
@@ -444,7 +443,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                         <div className="p-4 space-y-3">
                             {[
                                 { label: 'Realiseret Aktiegevinst', val: bd.stocks, icon: 'ph-trend-up', color: 'text-blue-600', bg: 'bg-blue-50' },
-                                { label: 'Lagerbeskattet (ETF)', val: bd.etfs, icon: 'ph-buildings', color: 'text-purple-600', bg: 'bg-purple-50' },
+                                { label: 'Lagerbeskattet ETF', val: bd.etfs, icon: 'ph-buildings', color: 'text-purple-600', bg: 'bg-purple-50' },
                                 { label: 'Udbytter', val: bd.divs, icon: 'ph-coins', color: 'text-green-600', bg: 'bg-green-50' },
                                 { label: 'Kapitalindkomst', val: bd.capital, icon: 'ph-bank', color: 'text-orange-600', bg: 'bg-orange-50' },
                                 { label: 'Aktiesparekonto', val: bd.ask, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50' },
@@ -808,11 +807,21 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                             <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
                                             <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                                         </linearGradient>
+                                        <linearGradient id="colorNet" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                        </linearGradient>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                                     <XAxis dataKey="date" type="number" domain={['dataMin', 'dataMax']} tickFormatter={formatAxisDateNumeric} ticks={graphRange === 'ALL' ? numericYearTicks : null} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#9ca3af' }} minTickGap={30} />
                                     <YAxis width={45} axisLine={false} tickLine={false} domain={['dataMin', 'dataMax']} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
-                                    <Tooltip formatter={(v) => formatCurrency(v)} labelFormatter={formatAxisDateNumeric} />
+                                    <Tooltip 
+                                        formatter={(value, name) => [
+                                            formatCurrency(value), 
+                                            name === 'value' ? 'Værdi' : name === 'netValue' ? 'Efter Skat' : 'Indskud'
+                                        ]} 
+                                        labelFormatter={formatAxisDateNumeric} 
+                                    />
                                     <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
                                     {showYearLines && numericYearTicks.map(timestamp => (<ReferenceLine key={timestamp} x={timestamp} stroke="#e5e7eb" />))}
                                     {(chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null && !isMulti) && (
@@ -823,9 +832,11 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                             <Area key={`v-${t}`} type="monotone" dataKey={t} stroke={COLORS[i % COLORS.length]} strokeWidth={1} fill="none" isAnimationActive={false} />
                                         ))
                                         : <>
-                                            <Area type="step" dataKey="invested" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
-                                            <Area type="monotone" dataKey="value" stroke="#2563eb" strokeWidth={1} fill="url(#colorVal)" isAnimationActive={false} />
-                                        </>}
+                                            <Area type="step" dataKey="invested" name="invested" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
+                                            <Area type="monotone" dataKey="value" name="value" stroke="#3b82f6" strokeWidth={1} fill="url(#colorVal)" isAnimationActive={false} />
+                                            <Area type="monotone" dataKey="netValue" name="netValue" stroke="#10b981" strokeWidth={2} fill="url(#colorNet)" isAnimationActive={false} />
+                                        </>
+                                    }
                                 </AreaChart>
                             </ResponsiveContainer>
                             {(chartSelection.chart === 'value' && chartSelection.start != null && chartSelection.end != null && !isMulti) && (() => {
