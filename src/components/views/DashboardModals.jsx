@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import ModalPortal from '../ModalPortal';
-import { formatCurrency, formatCurrencyNoDecimals } from '../../utils';
+import { formatCurrencyNoDecimals } from '../../utils';
 
 export const AllocationModal = ({ onClose, portfolio, marketData, getFxRate }) => {
     const [allocationMode, setAllocationMode] = useState('currency');

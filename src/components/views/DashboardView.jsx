@@ -108,7 +108,29 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 const year = d.getFullYear();
                 return graphRange === 'ALL' ? `${day}. ${month} ${year}` : `${day}. ${month}`;
             }} ticks={graphRange === 'ALL' ? numericYearTicks : null} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#9ca3af' }} minTickGap={30} />
-            <YAxis width={45} axisLine={false} tickLine={false} domain={type === 'value' ? ['dataMin', 'dataMax'] : ['auto', 'auto']} tickFormatter={(v) => type === 'value' ? `${(v / 1000).toFixed(0)}k` : `${v.toFixed(0)}%`} tick={{ fontSize: 10, fill: '#9ca3af' }} />
+            
+            {/* UPDATED YAXIS */}
+            <YAxis 
+                width={45} 
+                axisLine={false} 
+                tickLine={false} 
+                // Changed from dataMin/Max to auto to allow Recharts to pick "round" numbers (100k, 200k)
+                domain={['auto', 'auto']} 
+                tickFormatter={(v) => {
+                    if (type !== 'value') return `${v.toFixed(0)}%`;
+                    // Logic for Millions
+                    if (Math.abs(v) >= 1000000) {
+                        return `${(v / 1000000).toFixed(1).replace('.0', '')}m`; // Returns 1m, 1.5m, etc.
+                    }
+                    // Logic for Thousands
+                    if (Math.abs(v) >= 1000) {
+                        return `${(v / 1000).toFixed(0)}k`; // Returns 100k, 250k
+                    }
+                    return v;
+                }} 
+                tick={{ fontSize: 10, fill: '#9ca3af' }} 
+            />
+
             <Tooltip formatter={(v, n) => [type === 'value' ? formatCurrency(v) : `${v.toFixed(2)}%`, n === 'netValue' ? 'Efter Skat' : n === 'value' ? 'Før Skat' : n]} labelFormatter={(ts) => {
                 if (!ts) return '';
                 return new Date(ts).toISOString().split('T')[0];
@@ -126,11 +148,9 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 type === 'value' ? (
                     <>
                         <Area type="step" dataKey="invested" name="Indskud" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
-                        {/* Conditional Rendering for Gross Value */}
                         {showGross && (
                             <Area type="monotone" dataKey="value" name="value" stroke="#3b82f6" strokeWidth={1} fill="url(#colorVal)" isAnimationActive={false} />
                         )}
-                        {/* Net Value: Changed strokeWidth to 1 */}
                         <Area type="monotone" dataKey="netValue" name="netValue" stroke="#10b981" strokeWidth={1} fill="url(#colorNet)" isAnimationActive={false} />
                     </>
                 ) : (
@@ -275,7 +295,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                         <div className="h-12 px-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
                             <div className="flex items-center gap-2">
                                 <i className="ph ph-arrows-in text-blue-600"></i>
-                                <span className="font-bold text-sm text-gray-800">{fullscreenChart === 'growth' ? 'Afkast (%)' : 'Porteføljens Værdi'}</span>
+                                <span className="font-bold text-sm text-gray-800">{fullscreenChart === 'growth' ? 'Afkast (%)' : 'Værdi'}</span>
                                 {fullscreenChart === 'growth' && (!isMulti && settings.benchmarkTicker) && (() => {
                                     const last = numericGrowthData[numericGrowthData.length - 1];
                                     const diff = (last?.value ?? 0) - (last?.benchmark ?? 0);
@@ -389,7 +409,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                     {/* Value Chart */}
                     <div className="bg-white p-4 rounded-xl shadow-sm relative">
                         <div className="flex justify-between items-center mb-4">
-                            <h3 className="font-bold text-gray-800 text-sm uppercase">Porteføljens Værdi</h3>
+                            <h3 className="font-bold text-gray-800 text-sm uppercase">Værdi</h3>
                             <div className="flex items-center gap-2">
                                 <div className="hidden md:flex items-center gap-2">
                                     <div className="w-[100px]"><RangeSelector value={graphRange} onChange={setGraphRange} years={years} /></div>
