@@ -2,11 +2,11 @@ import { useState, useCallback, useMemo } from 'react';
 import { compressMarketData, decompressMarketData } from '../utils';
 
 const CACHE_KEY = 'marketDataCache_v2';
-const STALE_THRESHOLD_ACTIVE = 60 * 1000; 
-const STALE_THRESHOLD_INACTIVE = 24 * 60 * 60 * 1000; 
+const STALE_THRESHOLD_ACTIVE = 60 * 1000;
+const STALE_THRESHOLD_INACTIVE = 24 * 60 * 60 * 1000;
 
 export default function useMarketData(txs, settings, uniqueTickers) {
-    
+
     // 1. LAZY INITIALIZATION
     const [marketData, setMarketData] = useState(() => {
         try {
@@ -14,18 +14,18 @@ export default function useMarketData(txs, settings, uniqueTickers) {
             if (raw) {
                 const compressedStore = JSON.parse(raw);
                 const inflated = {};
-                
+
                 Object.keys(compressedStore).forEach(ticker => {
                     const item = compressedStore[ticker];
                     if (item && item.h) {
                         inflated[ticker] = {
                             history: decompressMarketData(item.h),
                             lastUpdated: item.u || Date.now(),
-                            currency: item.c,           
-                            price: item.p,              
-                            previousClose: item.pc,     
-                            lastTradeTime: item.lt,     
-                            ...item 
+                            currency: item.c,
+                            price: item.p,
+                            previousClose: item.pc,
+                            lastTradeTime: item.lt,
+                            ...item
                         };
                     }
                 });
@@ -82,12 +82,12 @@ export default function useMarketData(txs, settings, uniqueTickers) {
         const currentHoldings = new Set();
         const holdingMap = {};
         txs.forEach(t => {
-             if(!holdingMap[t.ticker]) holdingMap[t.ticker] = 0;
-             if(t.type === 'BUY') holdingMap[t.ticker] += t.qty;
-             if(t.type === 'SELL') holdingMap[t.ticker] -= t.qty;
+            if (!holdingMap[t.ticker]) holdingMap[t.ticker] = 0;
+            if (t.type === 'BUY') holdingMap[t.ticker] += t.qty;
+            if (t.type === 'SELL') holdingMap[t.ticker] -= t.qty;
         });
         Object.entries(holdingMap).forEach(([t, qty]) => {
-            if(Math.abs(qty) > 0.001) currentHoldings.add(t);
+            if (Math.abs(qty) > 0.001) currentHoldings.add(t);
         });
 
         const activeSet = new Set(currentHoldings);
@@ -97,8 +97,8 @@ export default function useMarketData(txs, settings, uniqueTickers) {
         usedCurrencies.forEach(c => activeSet.add(`${c}DKK=X`));
 
         const allTickers = [
-            ...uniqueTickers, 
-            ...usedCurrencies.map(c => `${c}DKK=X`), 
+            ...uniqueTickers,
+            ...usedCurrencies.map(c => `${c}DKK=X`),
             ...((settings.benchmarkTicker ? [settings.benchmarkTicker] : []))
         ];
         const uniqueList = [...new Set(allTickers)].filter(Boolean);
@@ -113,7 +113,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
             const lastUpd = cachedItem?.lastUpdated || 0;
             const age = now - lastUpd;
             const isActive = activeSet.has(ticker);
-            
+
             let shouldFetch = false;
             if (force) shouldFetch = true;
             else if (!cachedItem) shouldFetch = true;
@@ -134,7 +134,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
         setLoading(true);
 
         const nowSec = Math.floor(Date.now() / 1000);
-        let globalStart = nowSec - (2 * 365 * 24 * 60 * 60); 
+        let globalStart = nowSec - (2 * 365 * 24 * 60 * 60);
         if (txs.length > 0) {
             const firstTx = txs[0].date.getTime() / 1000;
             globalStart = firstTx - (30 * 24 * 60 * 60);
@@ -152,7 +152,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                 }
 
                 const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?period1=${Math.floor(myStart)}&period2=${nowSec}&interval=1d&events=div`;
-                const res = await fetch(`${settings.proxyUrl}${encodeURIComponent(url)}`);
+                const res = await fetch(url);
                 const json = await res.json();
 
                 if (json.chart?.result) {
@@ -173,14 +173,14 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                     const lastTradeTime = meta.regularMarketTime;
 
                     let prevClose = meta.chartPreviousClose || meta.previousClose;
-                    
+
                     // Logic to ensure "History" doesn't duplicate "Today"
                     // If Yahoo returns today's candle in history, use the one before it as prevClose
                     if (cleanHistory.length >= 2) {
-                         const lastCandle = cleanHistory[cleanHistory.length - 1];
-                         const secondLastCandle = cleanHistory[cleanHistory.length - 2];
-                         const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
-                         if (isLastCandleToday) prevClose = secondLastCandle.close; else prevClose = lastCandle.close;
+                        const lastCandle = cleanHistory[cleanHistory.length - 1];
+                        const secondLastCandle = cleanHistory[cleanHistory.length - 2];
+                        const isLastCandleToday = Math.abs(lastCandle.close - livePrice) / (livePrice || 1) < 0.0001;
+                        if (isLastCandleToday) prevClose = secondLastCandle.close; else prevClose = lastCandle.close;
                     } else if (cleanHistory.length === 1) prevClose = cleanHistory[0].close;
 
                     const nowTs = Date.now();
@@ -191,7 +191,7 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                         p: livePrice,
                         pc: prevClose,
                         lt: lastTradeTime,
-                        u: nowTs 
+                        u: nowTs
                     };
 
                     newInflatedData[ticker] = {

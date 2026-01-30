@@ -48,7 +48,6 @@ function App() {
     const [showCacheInspector, setShowCacheInspector] = useState(false);
 
     const [settings, setSettings] = usePersistentState('portfolio_settings', {
-        proxyUrl: '',
         married: true,
         anonymityBlur: true,
         benchmarkTicker: ''
