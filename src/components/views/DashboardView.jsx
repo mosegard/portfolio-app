@@ -76,7 +76,7 @@ const TickerSelector = ({ tickers, selected, onChange, COLORS }) => {
     );
 };
 
-// --- Shared Chart Component ---
+// --- Updated Shared Chart Component ---
 const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, selectedTickers, COLORS, graphRange, numericYearTicks, showYearLines, settings, showGross }) => (
     <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data}
@@ -99,33 +99,40 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                     <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                 </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-            <XAxis dataKey="date" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(ts) => {
-                if (!ts) return '';
-                const d = new Date(ts);
-                const day = d.getDate();
-                const month = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec'][d.getMonth()];
-                const year = d.getFullYear();
-                return graphRange === 'ALL' ? `${day}. ${month} ${year}` : `${day}. ${month}`;
-            }} ticks={graphRange === 'ALL' ? numericYearTicks : null} axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#9ca3af' }} minTickGap={30} />
             
-            {/* UPDATED YAXIS */}
+            {/* 1. Subtler grid lines so we can afford to have more of them */}
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" opacity={1.0} />
+            
+            <XAxis 
+                dataKey="date" 
+                type="number" 
+                domain={['dataMin', 'dataMax']} 
+                tickFormatter={(ts) => {
+                    if (!ts) return '';
+                    const d = new Date(ts);
+                    const day = d.getDate();
+                    const month = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec'][d.getMonth()];
+                    const year = d.getFullYear();
+                    return graphRange === 'ALL' ? `${day}. ${month} ${year}` : `${day}. ${month}`;
+                }} 
+                ticks={graphRange === 'ALL' ? numericYearTicks : null} 
+                axisLine={false} 
+                tickLine={false} 
+                tick={{ fontSize: 10, fill: '#9ca3af' }} 
+                minTickGap={30} 
+            />
+            
             <YAxis 
                 width={45} 
                 axisLine={false} 
                 tickLine={false} 
-                // Changed from dataMin/Max to auto to allow Recharts to pick "round" numbers (100k, 200k)
                 domain={['auto', 'auto']} 
+             
+                tickCount={10} 
                 tickFormatter={(v) => {
                     if (type !== 'value') return `${v.toFixed(0)}%`;
-                    // Logic for Millions
-                    if (Math.abs(v) >= 1000000) {
-                        return `${(v / 1000000).toFixed(1).replace('.0', '')}m`; // Returns 1m, 1.5m, etc.
-                    }
-                    // Logic for Thousands
-                    if (Math.abs(v) >= 1000) {
-                        return `${(v / 1000).toFixed(0)}k`; // Returns 100k, 250k
-                    }
+                    if (Math.abs(v) >= 1000000) return `${(v / 1000000).toFixed(1).replace('.0', '')}m`;
+                    if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(0)}k`;
                     return v;
                 }} 
                 tick={{ fontSize: 10, fill: '#9ca3af' }} 
@@ -135,7 +142,10 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 if (!ts) return '';
                 return new Date(ts).toISOString().split('T')[0];
             }} />
-            <ReferenceLine y={0} stroke="#e5e7eb" strokeDasharray="3 3" />
+            
+            {/* Highlight the 0-line more clearly to see growth vs loss */}
+            <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
+            
             {showYearLines && numericYearTicks.map(t => <ReferenceLine key={t} x={t} stroke="#e5e7eb" />)}
 
             {chartSelection.chart === type && chartSelection.start && chartSelection.end && !isMulti && (
@@ -143,19 +153,19 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
             )}
 
             {isMulti ? selectedTickers.map((t, i) => (
-                <Area key={t} type="monotone" dataKey={t} stroke={COLORS[i % COLORS.length]} strokeWidth={1} fill="none" isAnimationActive={false} />
+                <Area key={t} type="monotone" dataKey={t} stroke={COLORS[i % COLORS.length]} strokeWidth={1.5} fill="none" isAnimationActive={false} />
             )) : (
                 type === 'value' ? (
                     <>
                         <Area type="step" dataKey="invested" name="Indskud" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
                         {showGross && (
-                            <Area type="monotone" dataKey="value" name="value" stroke="#3b82f6" strokeWidth={1} fill="url(#colorVal)" isAnimationActive={false} />
+                            <Area type="monotone" dataKey="value" name="value" stroke="#3b82f6" strokeWidth={1.5} fill="url(#colorVal)" isAnimationActive={false} />
                         )}
-                        <Area type="monotone" dataKey="netValue" name="netValue" stroke="#10b981" strokeWidth={1} fill="url(#colorNet)" isAnimationActive={false} />
+                        <Area type="monotone" dataKey="netValue" name="netValue" stroke="#10b981" strokeWidth={1.5} fill="url(#colorNet)" isAnimationActive={false} />
                     </>
                 ) : (
                     <>
-                        <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={1} fill="url(#colorGrowth)" isAnimationActive={false} />
+                        <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={1.5} fill="url(#colorGrowth)" isAnimationActive={false} />
                         {settings.benchmarkTicker && <Area type="monotone" dataKey="benchmark" stroke="#f59e0b" strokeWidth={1} fill="none" isAnimationActive={false} />}
                     </>
                 )
@@ -163,7 +173,6 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
         </AreaChart>
     </ResponsiveContainer>
 );
-
 // --- Main Component ---
 const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketData, uniqueTickers, years }) => {
     const [graphRange, setGraphRange] = useState('ALL');
