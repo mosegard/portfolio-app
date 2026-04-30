@@ -188,7 +188,12 @@ export const normalizeCsvRow = (row) => {
     return out;
 };
 
-export const normalizeAllRows = (rows) => rows.map(normalizeCsvRow);
+export const ensureRowId = (row) => {
+    if (row._id) return row;
+    return { ...row, _id: crypto.randomUUID ? crypto.randomUUID() : `r_${Date.now()}_${Math.random().toString(36).slice(2)}` };
+};
+
+export const normalizeAllRows = (rows) => rows.map(r => ensureRowId(normalizeCsvRow(r)));
 
 
 export const validateData = (rows) => {

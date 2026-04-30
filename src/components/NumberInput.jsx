@@ -1,33 +1,24 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { formatDanishNumber, parseDanishNumber } from '../utils';
 
-const NumberInput = ({ row, fieldKey, rawKey, setRows, extraClass = "", title = "" }) => {
-    if (!row) return null;
+const NumberInput = ({ value, onCommit, extraClass = "", title = "" }) => {
+    const [raw, setRaw] = useState(null); // null = not editing
 
-    const displayValue = row[rawKey] !== undefined
-        ? row[rawKey]
-        : formatDanishNumber(row[fieldKey], 10);
+    const displayValue = raw !== null ? raw : formatDanishNumber(value, 10);
+
+    const handleFocus = (e) => {
+        setRaw(e.target.value);
+    };
 
     const handleChange = (e) => {
-        const newVal = e.target.value;
-        setRows(prev => {
-            const n = [...prev];
-            if (n[row._idx]) {
-                n[row._idx] = { ...n[row._idx], [rawKey]: newVal };
-            }
-            return n;
-        });
+        setRaw(e.target.value);
     };
 
     const handleBlur = () => {
-        setRows(prev => {
-            const n = [...prev];
-            if (n[row._idx] && n[row._idx][rawKey] !== undefined) {
-                n[row._idx][fieldKey] = parseDanishNumber(n[row._idx][rawKey]);
-                delete n[row._idx][rawKey];
-            }
-            return n;
-        });
+        if (raw !== null) {
+            onCommit(parseDanishNumber(raw));
+            setRaw(null);
+        }
     };
 
     const handleKeyDown = (e) => {
@@ -49,6 +40,7 @@ const NumberInput = ({ row, fieldKey, rawKey, setRows, extraClass = "", title = 
             className={`w-16 input-base p-1 rounded text-right font-mono ${extraClass}`}
             title={title}
             value={displayValue}
+            onFocus={handleFocus}
             onChange={handleChange}
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}

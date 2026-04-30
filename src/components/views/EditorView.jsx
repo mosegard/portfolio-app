@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import FlatpickrDate from '../FlatpickrDate';
 import NumberInput from '../NumberInput';
+import { BuySellModal, CashTransferModal, DividendModal } from '../TransactionModals';
 import {
     CSV_COLUMNS, TYPE_OPTIONS, CURRENCY_OPTIONS,
     parseDanishNumber, formatDanishNumber, formatNumber2,
@@ -12,33 +13,38 @@ const EditorView = ({
     setRows, 
     filterAccount, 
     config, 
+    accounts,
     saveToGithub, 
     statusMsg, 
     handleFileUpload,
-    detectedCurrencies // <--- Receive Prop
+    detectedCurrencies
 }) => {
     // --- Local State ---
     const [filters, setFilters] = useState({});
+    const [modal, setModal] = useState(null); // 'buy' | 'sell' | 'transfer' | 'dividend' | null
 
     // --- Helpers ---
-    const updateRow = (idx, k, v) => setRows(prev => {
+    const updateRow = useCallback((id, k, v) => setRows(prev => {
+        const idx = prev.findIndex(r => r._id === id);
+        if (idx === -1) return prev;
         const n = [...prev];
         let newVal = v;
         if (k === 'Type') newVal = determineType(v, n[idx]['Ticker'], n[idx]['Qty']);
         if (k === 'Currency') newVal = normalizeCurrency(v);
+        if (k === 'FxRate' && (newVal === 0 || newVal === '')) newVal = 1;
         n[idx] = { ...n[idx], [k]: newVal };
         return n;
-    });
+    }), [setRows]);
 
     const addRow = () => {
         const dStr = normalizeDate(new Date().toISOString().split('T')[0]);
-        // Default new rows to the currency of the current filtered account, if known
-        // Logic: Manual Config > Auto-Detected > Default DKK
         const defaultCur = filterAccount !== 'All' 
             ? (config.currencies[filterAccount] || detectedCurrencies[filterAccount] || 'DKK') 
             : 'DKK';
         
         setRows(prev => [{ 
+            _id: crypto.randomUUID(),
+            _createdAt: Date.now(),
             'Date': dStr, 
             'Type': 'Stock', 
             'Ticker': '', 
@@ -52,6 +58,14 @@ const EditorView = ({
         }, ...prev]);
     };
 
+    const handleModalSubmit = (newRows) => {
+        setRows(prev => [...newRows, ...prev]);
+    };
+
+    const defaultCurrency = filterAccount !== 'All' 
+        ? (config.currencies[filterAccount] || detectedCurrencies[filterAccount] || 'DKK') 
+        : 'DKK';
+
     const focusNext = (el) => {
         if (!el) return;
         const rowEl = el.closest('tr');
@@ -62,91 +76,114 @@ const EditorView = ({
         if (next) next.focus();
     };
 
-    // --- PREPARE DATA ---
-    const viewRows = [...rows]
-        .map((r, i) => ({ ...r, _origIdx: i }))
-        .sort((a, b) => (parseDanishDate(a['Date']) || 0) - (parseDanishDate(b['Date']) || 0));
-
-    let runningBalances = {};
-    let runningHoldings = {};
-
-    const editorRows = viewRows.map(row => {
-        const idx = row._origIdx;
-        const acc = row['Account'] || 'Unknown';
-        const ticker = row['Ticker'];
-        const holdingKey = `${ticker}_${acc}`;
-        
-        if (!runningBalances[acc]) runningBalances[acc] = 0;
-        if (ticker && !runningHoldings[holdingKey]) runningHoldings[holdingKey] = 0;
-
-        const qty = parseDanishNumber(row['Qty']);
-        const price = parseDanishNumber(row['Price']);
-        const comm = parseDanishNumber(row['Commission']);
-        const tax = parseDanishNumber(row['Withheld Tax']);
-        const taxRate = parseDanishNumber(row['FxRate']) || 1;
-
-        // --- CURRENCY LOGIC ---
-        // 1. Asset Currency: explicitly on the row
-        const stockCurrency = (row['Currency'] || 'DKK').toUpperCase();
-        
-        // 2. Account Currency: Manual Config > Auto-Detected > DKK
-        const accCurrency = (config.currencies[acc] || detectedCurrencies[acc] || 'DKK').toUpperCase();
-        
-        const isCrossCurrency = accCurrency !== stockCurrency;
-        const conversionRate = isCrossCurrency ? taxRate : 1;
-
-        const effectiveType = determineType(row['Type'], row['Ticker'], row['Qty']);
-        const isTrade = ['Stock', 'ETF'].includes(effectiveType);
-        const isCash = effectiveType === 'Cash' || effectiveType === 'Dividend';
-        const isDividend = effectiveType === 'Dividend';
-
-        const holdingsBefore = runningHoldings[holdingKey] || 0;
-
-        if (effectiveType === 'Stock' || effectiveType === 'ETF') {
-            runningHoldings[holdingKey] += qty;
-        }
-
-        let delta = 0;
-        let calcDetail = '';
-
-        if (isTrade) {
-            // (Price * Qty * Fx) + Comm
-            const assetVal = (qty * price) * conversionRate;
-            delta = -(assetVal + comm);
-            calcDetail = `${effectiveType}: -(${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(comm)}`;
-        } else if (isCash) {
-            const grossVal = (qty * price) * conversionRate;
-            delta = grossVal - tax;
-            calcDetail = `Cash: (${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(tax)}`;
-        }
-        runningBalances[acc] += delta;
-
-        const meta = {
-            isTrade, isCash, isCrossCurrency, stockCurrency, isDividend,
-            holdingsSnapshot: holdingsBefore,
-            // Warn if Fx is 1 but currencies don't match (likely user error)
-            warnFx: (stockCurrency !== accCurrency && Math.abs(taxRate - 1) < 0.001)
-        };
-
-        return { ...row, _idx: idx, _bal: runningBalances[acc], _delta: delta, _calcDetail: calcDetail, _accCur: accCurrency, _meta: meta };
-    });
-
-    const displayRows = editorRows.filter(r => {
-        if (filterAccount !== 'All' && r['Account'] !== filterAccount) return false;
-        return Object.entries(filters).every(([key, searchVal]) => {
-            if (!searchVal) return true;
-            const val = String(r[key] || '').toLowerCase();
-            return val.includes(searchVal.toLowerCase());
+    // --- PREPARE DATA (memoized) ---
+    const sortedRows = useMemo(() => {
+        return [...rows].sort((a, b) => {
+            const da = parseDanishDate(a['Date']) || 0;
+            const db = parseDanishDate(b['Date']) || 0;
+            const dateDiff = da - db;
+            if (dateDiff !== 0) return dateDiff;
+            // Tiebreaker: newer rows (higher _createdAt) sort last in ascending,
+            // so they appear first after reversing for display
+            return (a._createdAt || 0) - (b._createdAt || 0);
         });
-    }).slice().reverse();
+    }, [rows]);
+
+    const editorRows = useMemo(() => {
+        let runningBalances = {};
+        let runningHoldings = {};
+
+        return sortedRows.map(row => {
+            const acc = row['Account'] || 'Unknown';
+            const ticker = row['Ticker'];
+            const holdingKey = `${ticker}_${acc}`;
+            
+            if (!runningBalances[acc]) runningBalances[acc] = 0;
+            if (ticker && !runningHoldings[holdingKey]) runningHoldings[holdingKey] = 0;
+
+            const qty = parseDanishNumber(row['Qty']);
+            const price = parseDanishNumber(row['Price']);
+            const comm = parseDanishNumber(row['Commission']);
+            const tax = parseDanishNumber(row['Withheld Tax']);
+            const taxRate = parseDanishNumber(row['FxRate']) || 1;
+
+            const stockCurrency = (row['Currency'] || 'DKK').toUpperCase();
+            const accCurrency = (config.currencies[acc] || detectedCurrencies[acc] || 'DKK').toUpperCase();
+            const isCrossCurrency = accCurrency !== stockCurrency;
+            const conversionRate = isCrossCurrency ? taxRate : 1;
+
+            const effectiveType = determineType(row['Type'], row['Ticker'], row['Qty']);
+            const isTrade = ['Stock', 'ETF'].includes(effectiveType);
+            const isCash = effectiveType === 'Cash' || effectiveType === 'Dividend';
+            const isDividend = effectiveType === 'Dividend';
+
+            const holdingsBefore = runningHoldings[holdingKey] || 0;
+
+            if (effectiveType === 'Stock' || effectiveType === 'ETF') {
+                runningHoldings[holdingKey] += qty;
+            }
+
+            let delta = 0;
+            let calcDetail = '';
+
+            if (isTrade) {
+                const assetVal = (qty * price) * conversionRate;
+                delta = -(assetVal + comm);
+                calcDetail = `${effectiveType}: -(${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(comm)}`;
+            } else if (isCash) {
+                const grossVal = (qty * price) * conversionRate;
+                delta = grossVal - tax;
+                calcDetail = `Cash: (${formatDanishNumber(qty)} x ${formatDanishNumber(price)} x ${formatDanishNumber(conversionRate)}) - ${formatDanishNumber(tax)}`;
+            }
+            runningBalances[acc] += delta;
+
+            const meta = {
+                isTrade, isCash, isCrossCurrency, stockCurrency, isDividend,
+                holdingsSnapshot: holdingsBefore,
+                warnFx: (stockCurrency !== accCurrency && Math.abs(taxRate - 1) < 0.001)
+            };
+
+            return { ...row, _bal: runningBalances[acc], _delta: delta, _calcDetail: calcDetail, _accCur: accCurrency, _meta: meta };
+        });
+    }, [sortedRows, config, detectedCurrencies]);
+
+    const displayRows = useMemo(() => {
+        return editorRows.filter(r => {
+            if (filterAccount !== 'All' && r['Account'] !== filterAccount) return false;
+            return Object.entries(filters).every(([key, searchVal]) => {
+                if (!searchVal) return true;
+                const val = String(r[key] || '').toLowerCase();
+                return val.includes(searchVal.toLowerCase());
+            });
+        }).reverse();
+    }, [editorRows, filterAccount, filters]);
 
     return (
         <div className="flex flex-col h-full bg-white">
+            {/* MODALS */}
+            {modal === 'buy' && <BuySellModal type="buy" onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'sell' && <BuySellModal type="sell" onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'transfer' && <CashTransferModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'dividend' && <DividendModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+
             {/* TOP BAR */}
             <div className="flex items-center justify-between p-2 border-b bg-gray-50 shrink-0">
-                <div className="flex gap-2">
-                    <button onClick={addRow} className="flex items-center gap-1 px-3 py-1 bg-white border rounded hover:bg-gray-100 text-sm font-medium text-gray-700">
-                        <i className="ph ph-plus"></i> Add Row
+                <div className="flex gap-1.5">
+                    <button onClick={() => setModal('buy')} className="flex items-center gap-1 px-3 py-1 bg-white border border-green-200 rounded hover:bg-green-50 text-sm font-medium text-green-700">
+                        <i className="ph ph-arrow-up-right"></i> Buy
+                    </button>
+                    <button onClick={() => setModal('sell')} className="flex items-center gap-1 px-3 py-1 bg-white border border-red-200 rounded hover:bg-red-50 text-sm font-medium text-red-700">
+                        <i className="ph ph-arrow-down-right"></i> Sell
+                    </button>
+                    <button onClick={() => setModal('transfer')} className="flex items-center gap-1 px-3 py-1 bg-white border border-blue-200 rounded hover:bg-blue-50 text-sm font-medium text-blue-700">
+                        <i className="ph ph-arrows-left-right"></i> Transfer
+                    </button>
+                    <button onClick={() => setModal('dividend')} className="flex items-center gap-1 px-3 py-1 bg-white border border-yellow-200 rounded hover:bg-yellow-50 text-sm font-medium text-yellow-700">
+                        <i className="ph ph-coins"></i> Dividend
+                    </button>
+                    <span className="border-l border-gray-200 mx-1"></span>
+                    <button onClick={addRow} className="flex items-center gap-1 px-2 py-1 bg-white border rounded hover:bg-gray-100 text-xs text-gray-500" title="Add blank row">
+                        <i className="ph ph-plus"></i>
                     </button>
                     <button onClick={saveToGithub} className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium shadow-sm"><i className="ph ph-cloud-arrow-up"></i> Sync</button>
                     {statusMsg && <span className="text-xs text-gray-500 self-center ml-2">{statusMsg}</span>}
@@ -210,31 +247,29 @@ const EditorView = ({
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                         {displayRows.map(row => (
-                            <tr key={row._idx} className="group hover:bg-blue-50/30">
+                            <tr key={row._id} className="group hover:bg-blue-50/30">
                                 <td className="p-1 text-center sticky left-0 bg-white group-hover:bg-blue-50/30 border-r border-gray-100">
-                                    <button onClick={() => confirm('Delete?') && setRows(prev => prev.filter((_, i) => i !== row._idx))} className="text-gray-300 hover:text-red-500"><i className="ph ph-trash"></i></button>
+                                    <button onClick={() => confirm('Delete?') && setRows(prev => prev.filter(r => r._id !== row._id))} className="text-gray-300 hover:text-red-500"><i className="ph ph-trash"></i></button>
                                 </td>
 
                                 {/* Date */}
-                                <td className="p-1"><FlatpickrDate value={row['Date']} onChange={(v) => updateRow(row._idx, 'Date', v)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+                                <td className="p-1"><FlatpickrDate value={row['Date']} onChange={(v) => updateRow(row._id, 'Date', v)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
 
                                 {/* Type */}
                                 <td className="p-1">
-                                    <select className="w-20 input-base p-1 rounded font-medium text-gray-700" value={row['Type']} onChange={e => updateRow(row._idx, 'Type', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
+                                    <select className="w-20 input-base p-1 rounded font-medium text-gray-700" value={row['Type']} onChange={e => updateRow(row._id, 'Type', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
                                         {TYPE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
                                 </td>
 
                                 {/* Ticker */}
-                                <td className="p-1"><input className="w-full input-base p-1 rounded font-medium" value={row['Ticker']} onChange={e => updateRow(row._idx, 'Ticker', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+                                <td className="p-1"><input className="w-full input-base p-1 rounded font-medium" value={row['Ticker']} onChange={e => updateRow(row._id, 'Ticker', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
 
                                 {/* 1. Qty */}
                                 <td className="p-1 relative group/qty">
                                     <NumberInput
-                                        row={row}
-                                        setRows={setRows}
-                                        fieldKey="Qty"
-                                        rawKey="__qty_raw"
+                                        value={row['Qty']}
+                                        onCommit={(v) => updateRow(row._id, 'Qty', v)}
                                         extraClass="w-24"
                                     />
                                     {row._meta.isDividend && row['Ticker'] && (
@@ -249,16 +284,14 @@ const EditorView = ({
                                 {/* 2. Price */}
                                 <td className="p-1">
                                     <NumberInput
-                                        row={row}
-                                        setRows={setRows}
-                                        fieldKey="Price"
-                                        rawKey="__price_raw"
+                                        value={row['Price']}
+                                        onCommit={(v) => updateRow(row._id, 'Price', v)}
                                         extraClass={row._meta.isCash ? 'text-gray-300' : ''}
                                     />
                                 </td>
                                 {/* Currency */}
                                 <td className="p-1">
-                                    <select className="w-16 input-base p-1 rounded text-xs" value={row['Currency']} onChange={e => updateRow(row._idx, 'Currency', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
+                                    <select className="w-16 input-base p-1 rounded text-xs" value={row['Currency']} onChange={e => updateRow(row._id, 'Currency', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }}>
                                         {CURRENCY_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                                     </select>
                                 </td>
@@ -266,10 +299,8 @@ const EditorView = ({
                                 {/* FxRate with Warning Tooltip */}
                                 <td className="p-1">
                                     <NumberInput
-                                        row={row}
-                                        setRows={setRows}
-                                        fieldKey="FxRate"
-                                        rawKey="__fx_raw"
+                                        value={row['FxRate']}
+                                        onCommit={(v) => updateRow(row._id, 'FxRate', v)}
                                         extraClass={row._meta.warnFx ? 'bg-orange-50 text-orange-700 font-bold border border-orange-300' : ''}
                                         title={row._meta.warnFx ? "Critical: Foreign currency with Rate 1.00" : "Exchange Rate"}
                                     />
@@ -278,10 +309,8 @@ const EditorView = ({
                                 {/* 4. Commission */}
                                 <td className="p-1">
                                     <NumberInput
-                                        row={row}
-                                        setRows={setRows}
-                                        fieldKey="Commission"
-                                        rawKey="__comm_raw"
+                                        value={row['Commission']}
+                                        onCommit={(v) => updateRow(row._id, 'Commission', v)}
                                         extraClass={!row._meta.isTrade ? 'text-gray-300' : 'text-gray-700'}
                                         title={`Trading Fee in ${row._accCur}`}
                                     />
@@ -322,10 +351,8 @@ const EditorView = ({
 
                                         return (
                                             <NumberInput
-                                                row={row}
-                                                setRows={setRows}
-                                                fieldKey="Withheld Tax"
-                                                rawKey="__tax_raw"
+                                                value={row['Withheld Tax']}
+                                                onCommit={(v) => updateRow(row._id, 'Withheld Tax', v)}
                                                 extraClass={css}
                                                 title={tooltip}
                                             />
@@ -335,11 +362,11 @@ const EditorView = ({
 
                                 {/* Account */}
                                 {filterAccount === 'All' && (
-                                    <td className="p-1"><input className="w-24 input-base p-1 rounded text-xs" value={row['Account']} onChange={e => updateRow(row._idx, 'Account', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+                                    <td className="p-1"><input className="w-24 input-base p-1 rounded text-xs" value={row['Account']} onChange={e => updateRow(row._id, 'Account', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
                                 )}
 
                                 {/* Note */}
-                                <td className="p-1"><input className="w-24 input-base p-1 rounded text-gray-400 text-xs" value={row['Note']} onChange={e => updateRow(row._idx, 'Note', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+                                <td className="p-1"><input className="w-24 input-base p-1 rounded text-gray-400 text-xs" value={row['Note'] || ''} onChange={e => updateRow(row._id, 'Note', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
 
                                 {/* Delta & Balance */}
                                 <td className={`p-2 text-right font-mono ${row._delta >= 0 ? 'text-green-600' : 'text-red-600'}`} title={row._calcDetail}>{formatNumber2(row._delta)}</td>

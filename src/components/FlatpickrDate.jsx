@@ -1,10 +1,13 @@
 import React, { useRef, useEffect } from 'react';
 import flatpickr from 'flatpickr';
+import 'flatpickr/dist/flatpickr.min.css';
 import { Danish } from 'flatpickr/dist/l10n/da.js';
 
 const FlatpickrDate = ({ value, onChange, onKeyDown }) => {
     const inputRef = useRef(null);
     const fpRef = useRef(null);
+    const onChangeRef = useRef(onChange);
+    onChangeRef.current = onChange;
 
     useEffect(() => {
         if (inputRef.current) {
@@ -17,7 +20,7 @@ const FlatpickrDate = ({ value, onChange, onKeyDown }) => {
                 locale: Danish,
                 allowInput: true,
                 onChange: (selectedDates, dateStr) => {
-                    onChange(dateStr);
+                    onChangeRef.current(dateStr);
                 }
             });
         }

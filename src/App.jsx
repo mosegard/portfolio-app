@@ -15,7 +15,8 @@ import {
     CSV_COLUMNS,
     parseDanishDate,
     normalizeAllRows,
-    validateData, rowsToTransactions, utf8_to_b64, b64_to_utf8
+    validateData, rowsToTransactions, utf8_to_b64, b64_to_utf8,
+    ensureRowId
 } from './utils';
 
 import usePortfolioEngine from './hooks/usePortfolioEngine';
@@ -34,7 +35,14 @@ function App() {
     // 1. Load Rows (Transactions) from Cache
     const [rows, setRows] = usePersistentState('portfolio_rows', []);
 
-    // 2. Save Rows to Cache whenever they change
+    // 2. Ensure all rows have stable IDs (migration for rows loaded from localStorage)
+    useEffect(() => {
+        if (rows.length > 0 && rows.some(r => !r._id)) {
+            setRows(prev => prev.map(ensureRowId));
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // 3. Save Rows to Cache whenever they change
     useEffect(() => {
         try {
             localStorage.setItem('portfolio_rows', JSON.stringify(rows));
@@ -415,7 +423,7 @@ function App() {
                 )}
 
                 <div className="flex-1 overflow-auto overflow-x-auto bg-gray-50">
-                    {view === 'editor' && <EditorView rows={rows} setRows={setRows} filterAccount={filterAccount} config={config} saveToGithub={saveToGithub} statusMsg={statusMsg} handleFileUpload={handleFileUpload} detectedCurrencies={detectedCurrencies} />}
+                    {view === 'editor' && <EditorView rows={rows} setRows={setRows} filterAccount={filterAccount} config={config} accounts={accounts} saveToGithub={saveToGithub} statusMsg={statusMsg} handleFileUpload={handleFileUpload} detectedCurrencies={detectedCurrencies} />}
                     {view === 'dashboard' && <DashboardView calc={calc} marketData={marketData} settings={settings} setSettings={setSettings} fetchMarketData={fetchMarketData} uniqueTickers={uniqueTickers} years={years} />}
                     {view === 'holdings' && <HoldingsView portfolio={calc.portfolio} marketData={marketData} loading={loading} lastUpdate={lastUpdate} />}
                     {view === 'split' && <SplitToolView rows={rows} setRows={setRows} marketData={marketData} tickers={uniqueTickers} txs={txs} />}
