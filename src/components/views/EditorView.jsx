@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import FlatpickrDate from '../FlatpickrDate';
 import NumberInput from '../NumberInput';
-import { BuySellModal, CashTransferModal, DividendModal } from '../TransactionModals';
+import { BuySellModal, CashTransferModal, DividendModal, InterestModal } from '../TransactionModals';
 import {
     CSV_COLUMNS, TYPE_OPTIONS, CURRENCY_OPTIONS,
     parseDanishNumber, formatDanishNumber, formatNumber2,
@@ -14,7 +14,7 @@ const EditorView = ({
     filterAccount, 
     config, 
     accounts,
-    saveToGithub, 
+    tickers,
     statusMsg, 
     handleFileUpload,
     detectedCurrencies
@@ -161,10 +161,11 @@ const EditorView = ({
     return (
         <div className="flex flex-col h-full bg-white">
             {/* MODALS */}
-            {modal === 'buy' && <BuySellModal type="buy" onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
-            {modal === 'sell' && <BuySellModal type="sell" onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
-            {modal === 'transfer' && <CashTransferModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
-            {modal === 'dividend' && <DividendModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'buy' && <BuySellModal type="buy" onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} tickers={tickers} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'sell' && <BuySellModal type="sell" onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} tickers={tickers} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'transfer' && <CashTransferModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} config={config} detectedCurrencies={detectedCurrencies} />}
+            {modal === 'dividend' && <DividendModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} tickers={tickers} filterAccount={filterAccount} defaultCurrency={defaultCurrency} />}
+            {modal === 'interest' && <InterestModal onClose={() => setModal(null)} onSubmit={handleModalSubmit} accounts={accounts} filterAccount={filterAccount} config={config} detectedCurrencies={detectedCurrencies} />}
 
             {/* TOP BAR */}
             <div className="flex items-center justify-between p-2 border-b bg-gray-50 shrink-0">
@@ -181,12 +182,14 @@ const EditorView = ({
                     <button onClick={() => setModal('dividend')} className="flex items-center gap-1 px-3 py-1 bg-white border border-yellow-200 rounded hover:bg-yellow-50 text-sm font-medium text-yellow-700">
                         <i className="ph ph-coins"></i> Dividend
                     </button>
+                    <button onClick={() => setModal('interest')} className="flex items-center gap-1 px-3 py-1 bg-white border border-emerald-200 rounded hover:bg-emerald-50 text-sm font-medium text-emerald-700">
+                        <i className="ph ph-percent"></i> Interest
+                    </button>
                     <span className="border-l border-gray-200 mx-1"></span>
                     <button onClick={addRow} className="flex items-center gap-1 px-2 py-1 bg-white border rounded hover:bg-gray-100 text-xs text-gray-500" title="Add blank row">
                         <i className="ph ph-plus"></i>
                     </button>
-                    <button onClick={saveToGithub} className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium shadow-sm"><i className="ph ph-cloud-arrow-up"></i> Sync</button>
-                    {statusMsg && <span className="text-xs text-gray-500 self-center ml-2">{statusMsg}</span>}
+                    {statusMsg && <span className="text-xs text-gray-500 self-center ml-2"><i className="ph ph-cloud-check"></i> {statusMsg}</span>}
                 </div>
             </div>
 

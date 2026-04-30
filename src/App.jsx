@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import Papa from 'papaparse';
 
 // Components
@@ -214,7 +214,7 @@ function App() {
         }
     };
 
-    const saveToGithub = async () => {
+    const saveToGithub = useCallback(async () => {
         if (!ghConfig.token) { setShowSettings(true); return; }
         setStatusMsg('Saving...');
         const sorted = [...rows].sort((a, b) => (parseDanishDate(a['Date']) || 0) - (parseDanishDate(b['Date']) || 0));
@@ -229,7 +229,24 @@ function App() {
             setStatusMsg('Saved!');
         } catch { setStatusMsg('Err'); }
         setTimeout(() => setStatusMsg(''), 2000);
-    };
+    }, [rows, ghConfig, fileSha]);
+
+    // Auto-sync: debounce save to GitHub 3s after any row change
+    const autoSyncTimer = useRef(null);
+    const initialLoad = useRef(true);
+    useEffect(() => {
+        // Skip auto-sync on initial load
+        if (initialLoad.current) {
+            initialLoad.current = false;
+            return;
+        }
+        if (!ghConfig.token || rows.length === 0) return;
+        if (autoSyncTimer.current) clearTimeout(autoSyncTimer.current);
+        autoSyncTimer.current = setTimeout(() => {
+            saveToGithub();
+        }, 3000);
+        return () => { if (autoSyncTimer.current) clearTimeout(autoSyncTimer.current); };
+    }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleFileUpload = (e) => {
         Papa.parse(e.target.files[0], {
@@ -423,7 +440,7 @@ function App() {
                 )}
 
                 <div className="flex-1 overflow-auto overflow-x-auto bg-gray-50">
-                    {view === 'editor' && <EditorView rows={rows} setRows={setRows} filterAccount={filterAccount} config={config} accounts={accounts} saveToGithub={saveToGithub} statusMsg={statusMsg} handleFileUpload={handleFileUpload} detectedCurrencies={detectedCurrencies} />}
+                    {view === 'editor' && <EditorView rows={rows} setRows={setRows} filterAccount={filterAccount} config={config} accounts={accounts} tickers={uniqueTickers} saveToGithub={saveToGithub} statusMsg={statusMsg} handleFileUpload={handleFileUpload} detectedCurrencies={detectedCurrencies} />}
                     {view === 'dashboard' && <DashboardView calc={calc} marketData={marketData} settings={settings} setSettings={setSettings} fetchMarketData={fetchMarketData} uniqueTickers={uniqueTickers} years={years} />}
                     {view === 'holdings' && <HoldingsView portfolio={calc.portfolio} marketData={marketData} loading={loading} lastUpdate={lastUpdate} />}
                     {view === 'split' && <SplitToolView rows={rows} setRows={setRows} marketData={marketData} tickers={uniqueTickers} txs={txs} />}
