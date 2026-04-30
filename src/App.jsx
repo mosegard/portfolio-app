@@ -223,6 +223,13 @@ function App() {
         }
     };
 
+    // Auto-load from GitHub on startup if token is configured
+    useEffect(() => {
+        if (ghConfig.token && ghConfig.owner && ghConfig.repo) {
+            loadFromGithub();
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     const saveToGithub = useCallback(async () => {
         if (!ghConfig.token) { setShowSettings(true); return; }
         setStatusMsg('Saving...');
