@@ -70,6 +70,7 @@ function App() {
     const [statusMsg, setStatusMsg] = useState('');
     const [fileSha, setFileSha] = useState(null);
     const [schemaErrors, setSchemaErrors] = useState([]);
+    const [syncError, setSyncError] = useState(null); // { message, detail, timestamp }
 
     // Restore persisted GitHub settings
     useEffect(() => {
@@ -164,6 +165,7 @@ function App() {
     const loadFromGithub = async () => {
         if (!ghConfig.token) return;
         setStatusMsg('Loading...');
+        setSyncError(null);
         try {
             const headers = { 'Authorization': `token ${ghConfig.token}` };
             const repoBase = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/`;
@@ -171,7 +173,13 @@ function App() {
                 fetch(`${repoBase}${ghConfig.path}`, { headers }),
                 fetch(`${repoBase}portfolio-settings.csv`, { headers })
             ]);
-            if (!resData.ok) throw new Error('Repo Error');
+            if (!resData.ok) {
+                const errBody = await resData.json().catch(() => ({}));
+                const detail = resData.status === 401 ? 'GitHub token is invalid or expired. Update it in Settings.' 
+                    : resData.status === 404 ? 'Repository or file not found. Check your settings.'
+                    : `HTTP ${resData.status}: ${errBody.message || 'Unknown error'}`;
+                throw new Error(detail);
+            }
             const dataJson = await resData.json();
             setFileSha(dataJson.sha);
             const dataCsv = b64_to_utf8(dataJson.content);
@@ -210,6 +218,7 @@ function App() {
             setTimeout(() => setStatusMsg(''), 2000);
         } catch (e) {
             console.error(e);
+            setSyncError({ message: 'Failed to load from GitHub', detail: e.message, timestamp: Date.now() });
             setStatusMsg('Error Loading');
         }
     };
@@ -219,15 +228,45 @@ function App() {
         setStatusMsg('Saving...');
         const sorted = [...rows].sort((a, b) => (parseDanishDate(a['Date']) || 0) - (parseDanishDate(b['Date']) || 0));
         const csv = Papa.unparse(sorted, { columns: CSV_COLUMNS });
-        try {
-            const res = await fetch(`https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${ghConfig.path}`, {
-                method: 'PUT', headers: { 'Authorization': `token ${ghConfig.token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: 'Update', content: utf8_to_b64(csv), sha: fileSha })
+        const url = `https://api.github.com/repos/${ghConfig.owner}/${ghConfig.repo}/contents/${ghConfig.path}`;
+        const headers = { 'Authorization': `token ${ghConfig.token}`, 'Content-Type': 'application/json' };
+
+        const attemptSave = async (sha) => {
+            const res = await fetch(url, {
+                method: 'PUT', headers,
+                body: JSON.stringify({ message: 'Update', content: utf8_to_b64(csv), sha })
             });
+            return res;
+        };
+
+        try {
+            let res = await attemptSave(fileSha);
+
+            // Auto-recover from SHA mismatch: fetch latest SHA and retry once
+            if (res.status === 409 || res.status === 422) {
+                const latestRes = await fetch(url, { headers: { 'Authorization': `token ${ghConfig.token}` } });
+                if (latestRes.ok) {
+                    const latestData = await latestRes.json();
+                    setFileSha(latestData.sha);
+                    res = await attemptSave(latestData.sha);
+                }
+            }
+
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                const detail = res.status === 401 ? 'GitHub token is invalid or expired. Update it in Settings.'
+                    : `HTTP ${res.status}: ${errBody.message || 'Unknown error'}`;
+                throw new Error(detail);
+            }
             const d = await res.json();
             setFileSha(d.content.sha);
+            setSyncError(null);
             setStatusMsg('Saved!');
-        } catch { setStatusMsg('Err'); }
+        } catch (e) {
+            console.error('Sync save failed:', e);
+            setSyncError({ message: 'Failed to save to GitHub', detail: e.message, timestamp: Date.now() });
+            setStatusMsg('Save failed');
+        }
         setTimeout(() => setStatusMsg(''), 2000);
     }, [rows, ghConfig, fileSha]);
 
@@ -264,6 +303,24 @@ function App() {
 
     return (
         <div className="flex h-screen w-full bg-white relative font-sans text-gray-800">
+            {/* SYNC ERROR BANNER */}
+            {syncError && (
+                <div className="absolute top-0 left-0 right-0 z-[100] bg-red-600 text-white px-4 py-3 flex items-center justify-between shadow-lg">
+                    <div className="flex items-center gap-3">
+                        <i className="ph ph-warning-circle text-xl"></i>
+                        <div>
+                            <div className="font-semibold text-sm">{syncError.message}</div>
+                            <div className="text-xs text-red-100">{syncError.detail}</div>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => setShowSettings(true)} className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded text-xs font-medium">Settings</button>
+                        <button onClick={() => saveToGithub()} className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded text-xs font-medium">Retry</button>
+                        <button onClick={() => setSyncError(null)} className="ml-2 text-red-200 hover:text-white"><i className="ph ph-x"></i></button>
+                    </div>
+                </div>
+            )}
+
             {showCacheInspector && <CacheInspectorView onClose={() => setShowCacheInspector(false)} />}
             
             {settings.anonymityBlur && blurActive && (
