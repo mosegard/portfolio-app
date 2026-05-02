@@ -22,6 +22,8 @@ const EditorView = ({
     // --- Local State ---
     const [filters, setFilters] = useState({});
     const [modal, setModal] = useState(null); // 'buy' | 'sell' | 'transfer' | 'dividend' | null
+    const [fxCalcRow, setFxCalcRow] = useState(null);
+    const [fxCalcDkk, setFxCalcDkk] = useState('');
 
     // --- Helpers ---
     const updateRow = useCallback((id, k, v) => setRows(prev => {
@@ -137,10 +139,12 @@ const EditorView = ({
             }
             runningBalances[acc] += delta;
 
+            const needsFxRate = ['Stock', 'ETF', 'Dividend'].includes(effectiveType);
             const meta = {
                 isTrade, isCash, isCrossCurrency, stockCurrency, isDividend,
                 holdingsSnapshot: holdingsBefore,
-                warnFx: (stockCurrency !== accCurrency && Math.abs(taxRate - 1) < 0.001)
+                warnFx: needsFxRate && stockCurrency !== 'DKK' && Math.abs(taxRate - 1) < 0.001,
+                warnTicker: needsFxRate && !row['Ticker'],
             };
 
             return { ...row, _bal: runningBalances[acc], _delta: delta, _calcDetail: calcDetail, _accCur: accCurrency, _meta: meta };
@@ -252,7 +256,10 @@ const EditorView = ({
                         {displayRows.map(row => (
                             <tr key={row._id} className="group hover:bg-blue-50/30">
                                 <td className="p-1 text-center sticky left-0 bg-white group-hover:bg-blue-50/30 border-r border-gray-100">
-                                    <button onClick={() => confirm('Delete?') && setRows(prev => prev.filter(r => r._id !== row._id))} className="text-gray-300 hover:text-red-500"><i className="ph ph-trash"></i></button>
+                                    <div className="flex items-center gap-0.5 justify-center">
+                                        <button onClick={() => confirm('Delete?') && setRows(prev => prev.filter(r => r._id !== row._id))} className="text-gray-300 hover:text-red-500"><i className="ph ph-trash"></i></button>
+                                        {(row._meta.warnFx || row._meta.warnTicker) && <i className="ph-fill ph-warning text-orange-400 text-xs" title="Row has validation issues"></i>}
+                                    </div>
                                 </td>
 
                                 {/* Date */}
@@ -266,7 +273,7 @@ const EditorView = ({
                                 </td>
 
                                 {/* Ticker */}
-                                <td className="p-1"><input className="w-full input-base p-1 rounded font-medium" value={row['Ticker']} onChange={e => updateRow(row._id, 'Ticker', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} /></td>
+                                <td className="p-1"><input className={`w-full input-base p-1 rounded font-medium ${row._meta.warnTicker ? 'bg-orange-50 text-orange-700 border border-orange-300' : ''}`} value={row['Ticker']} onChange={e => updateRow(row._id, 'Ticker', e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(e.currentTarget); } }} title={row._meta.warnTicker ? 'Missing ticker for ' + row['Type'] : ''} /></td>
 
                                 {/* 1. Qty */}
                                 <td className="p-1 relative group/qty">
@@ -299,14 +306,66 @@ const EditorView = ({
                                     </select>
                                 </td>
 
-                                {/* FxRate with Warning Tooltip */}
-                                <td className="p-1">
-                                    <NumberInput
-                                        value={row['FxRate']}
-                                        onCommit={(v) => updateRow(row._id, 'FxRate', v)}
-                                        extraClass={row._meta.warnFx ? 'bg-orange-50 text-orange-700 font-bold border border-orange-300' : ''}
-                                        title={row._meta.warnFx ? "Critical: Foreign currency with Rate 1.00" : "Exchange Rate"}
-                                    />
+                                {/* FxRate with Warning Tooltip + DKK Calculator */}
+                                <td className="p-1 relative">
+                                    <div className="flex items-center gap-0.5">
+                                        <NumberInput
+                                            value={row['FxRate']}
+                                            onCommit={(v) => updateRow(row._id, 'FxRate', v)}
+                                            extraClass={row._meta.warnFx ? 'bg-orange-50 text-orange-700 font-bold border border-orange-300' : ''}
+                                            title={row._meta.warnFx ? "Critical: Foreign currency with Rate 1.00" : "Exchange Rate"}
+                                        />
+                                        {row._meta.stockCurrency !== 'DKK' && (
+                                            <button
+                                                onClick={() => { setFxCalcRow(fxCalcRow === row._id ? null : row._id); setFxCalcDkk(''); }}
+                                                className={`shrink-0 w-5 h-5 flex items-center justify-center rounded text-[10px] ${fxCalcRow === row._id ? 'bg-blue-100 text-blue-600' : 'text-gray-300 hover:text-blue-500 hover:bg-blue-50'}`}
+                                                title="Calculate rate from DKK amount"
+                                            >
+                                                <i className="ph ph-calculator"></i>
+                                            </button>
+                                        )}
+                                    </div>
+                                    {fxCalcRow === row._id && (() => {
+                                        const calcDkk = parseDanishNumber(fxCalcDkk);
+                                        const calcQty = parseDanishNumber(row['Qty']);
+                                        const calcPrice = parseDanishNumber(row['Price']);
+                                        const calcDenom = Math.abs(calcQty * calcPrice);
+                                        const calcRate = calcDkk > 0 && calcDenom > 0 ? calcDkk / calcDenom : null;
+                                        const applyRate = () => {
+                                            if (calcRate) { updateRow(row._id, 'FxRate', calcRate); setFxCalcRow(null); }
+                                        };
+                                        return (
+                                            <div className="absolute z-30 top-full right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl p-3 w-56">
+                                                <div className="text-[10px] font-medium text-gray-500 mb-1.5">Total amount in DKK</div>
+                                                <div className="flex gap-1">
+                                                    <input
+                                                        autoFocus
+                                                        className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm focus:border-blue-400 outline-none"
+                                                        inputMode="decimal"
+                                                        value={fxCalcDkk}
+                                                        onChange={e => setFxCalcDkk(e.target.value)}
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') applyRate();
+                                                            if (e.key === 'Escape') setFxCalcRow(null);
+                                                        }}
+                                                        placeholder="e.g. 3.400"
+                                                    />
+                                                    <button onClick={applyRate} className="px-2 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs font-medium" disabled={!calcRate}>
+                                                        OK
+                                                    </button>
+                                                </div>
+                                                {calcRate && (
+                                                    <div className="mt-1.5 text-[10px] text-gray-500">
+                                                        Rate: <span className="font-mono font-medium text-gray-700">{calcRate.toFixed(4)}</span>
+                                                        <span className="ml-1">({row._meta.stockCurrency} → DKK)</span>
+                                                    </div>
+                                                )}
+                                                {!calcRate && calcDkk > 0 && calcDenom === 0 && (
+                                                    <div className="mt-1.5 text-[10px] text-orange-500">Fill in Qty and Price first</div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </td>
 
                                 {/* 4. Commission */}

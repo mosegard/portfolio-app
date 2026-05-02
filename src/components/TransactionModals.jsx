@@ -205,11 +205,31 @@ export const CashTransferModal = ({ onClose, onSubmit, accounts, filterAccount, 
     const toCurrency = form.toAccount ? getCurrency(form.toAccount) : fromCurrency;
     const sameCurrency = fromCurrency === toCurrency;
 
+    // Compute implied FxRate for cross-currency transfers
+    const fromAmtPreview = parseFloat((form.fromAmount || '').replace(',', '.')) || 0;
+    const toAmtPreview = parseFloat((form.toAmount || '').replace(',', '.')) || 0;
+    const impliedRate = !sameCurrency && fromAmtPreview > 0 && toAmtPreview > 0
+        ? (fromCurrency === 'DKK' ? fromAmtPreview / toAmtPreview
+           : toCurrency === 'DKK' ? toAmtPreview / fromAmtPreview
+           : null)
+        : null;
+    const impliedForeignCur = fromCurrency === 'DKK' ? toCurrency : toCurrency === 'DKK' ? fromCurrency : null;
+
     const handleSubmit = (e) => {
         e.preventDefault();
         const fromAmt = parseFloat(form.fromAmount.replace(',', '.')) || 0;
         const toAmt = sameCurrency ? fromAmt : (parseFloat(form.toAmount.replace(',', '.')) || fromAmt);
         const now = Date.now();
+
+        // Calculate FxRate for non-DKK sides
+        let fromFx = 1, toFx = 1;
+        if (!sameCurrency && fromAmt > 0 && toAmt > 0) {
+            if (fromCurrency === 'DKK') {
+                toFx = fromAmt / toAmt;  // DKK per 1 foreign unit
+            } else if (toCurrency === 'DKK') {
+                fromFx = toAmt / fromAmt;  // DKK per 1 foreign unit
+            }
+        }
 
         const rows = [];
 
@@ -222,7 +242,7 @@ export const CashTransferModal = ({ onClose, onSubmit, accounts, filterAccount, 
             'Ticker': fromCurrency,
             'Qty': -Math.abs(fromAmt),
             'Price': 1,
-            'FxRate': 1,
+            'FxRate': fromFx,
             'Commission': 0,
             'Withheld Tax': 0,
             'Currency': fromCurrency,
@@ -240,7 +260,7 @@ export const CashTransferModal = ({ onClose, onSubmit, accounts, filterAccount, 
                 'Ticker': toCurrency,
                 'Qty': Math.abs(toAmt),
                 'Price': 1,
-                'FxRate': 1,
+                'FxRate': toFx,
                 'Commission': 0,
                 'Withheld Tax': 0,
                 'Currency': toCurrency,
@@ -293,6 +313,13 @@ export const CashTransferModal = ({ onClose, onSubmit, accounts, filterAccount, 
                                 <input className={inputCls} inputMode="decimal" value={form.toAmount} onChange={e => set('toAmount', e.target.value)} placeholder="0,00" required />
                             </Field>
                         )}
+                    </div>
+                )}
+
+                {impliedRate && impliedForeignCur && (
+                    <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-lg text-sm text-blue-700">
+                        <i className="ph ph-arrows-left-right"></i>
+                        <span>Implied rate: <span className="font-mono font-medium">{impliedRate.toFixed(4)}</span> DKK per 1 {impliedForeignCur}</span>
                     </div>
                 )}
 
