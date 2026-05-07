@@ -258,7 +258,7 @@ const YearOverYearChart = ({ yoyData, selectedYears, years }) => {
 
 // --- Main Component ---
 const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketData, uniqueTickers, years }) => {
-    const [graphRange, setGraphRange] = useState('ALL');
+    const [graphRange, setGraphRange] = useState('1Y');
     const [customRange, setCustomRange] = useState({ startIso: '', endIso: '' });
     const [chartSelection, setChartSelection] = useState({ start: null, end: null, chart: null, dragging: false });
     const [fullscreenChart, setFullscreenChart] = useState(null);
@@ -551,32 +551,18 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
 
                                 {/* Benchmark selector (only for growth mode) */}
                                 {chartMode === 'growth' && !isMulti && (
-                                    <div className="flex items-center gap-1">
-                                        {BENCHMARKS.slice(0, 5).map(b => (
-                                            <button
-                                                key={b.ticker}
-                                                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
-                                                    settings.benchmarkTicker === b.ticker 
-                                                        ? (b.ticker ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500')
-                                                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
-                                                }`}
-                                                onClick={() => { setSettings(s => ({ ...s, benchmarkTicker: b.ticker })); if (b.ticker) fetchMarketData(true); }}
-                                            >
-                                                {b.label}
-                                            </button>
-                                        ))}
-                                        <div className="relative">
-                                            <select
-                                                className="appearance-none pl-1.5 pr-4 py-0.5 text-[10px] font-bold rounded bg-transparent text-gray-400 cursor-pointer focus:outline-none hover:text-gray-600"
-                                                value={BENCHMARKS.slice(5).find(b => b.ticker === settings.benchmarkTicker) ? settings.benchmarkTicker : ''}
-                                                onChange={e => { if (e.target.value !== undefined) { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}}
-                                            >
-                                                <option value="" disabled>Mere…</option>
-                                                {BENCHMARKS.slice(5).map(b => <option key={b.ticker} value={b.ticker}>{b.label}</option>)}
-                                            </select>
-                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-0.5">
-                                                <i className="ph ph-dots-three text-[10px] text-gray-400"></i>
-                                            </div>
+                                    <div className="relative">
+                                        <select
+                                            className={`appearance-none pl-2 pr-6 py-0.5 text-[10px] font-bold rounded-md border cursor-pointer focus:outline-none ${
+                                                settings.benchmarkTicker ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-gray-200 text-gray-500'
+                                            }`}
+                                            value={settings.benchmarkTicker}
+                                            onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); if (e.target.value) fetchMarketData(true); }}
+                                        >
+                                            {BENCHMARKS.map(b => <option key={b.ticker} value={b.ticker}>{b.ticker ? `vs ${b.label}` : b.label}</option>)}
+                                        </select>
+                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1.5">
+                                            <i className="ph ph-caret-down text-[9px]"></i>
                                         </div>
                                     </div>
                                 )}
