@@ -1,28 +1,53 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea, LineChart, Line } from 'recharts';
 import ModalPortal from '../ModalPortal';
 import { formatCurrency, formatCurrencyNoDecimals } from '../../utils';
 import useDashboardChartData from '../../hooks/useDashboardChartData';
 import { AllocationModal, LiquidationModal, GainModal, MoversModal } from './DashboardModals';
 
-// --- Reusable Selectors ---
+// --- Pill-bar Range Selector ---
 const RangeSelector = ({ value, onChange, years }) => {
-    const baseRanges = ['1M', 'ALL'];
-    const options = value === 'CUSTOM' ? ['CUSTOM', ...baseRanges, ...years] : [...baseRanges, ...years];
+    const ranges = [
+        { key: '1M', label: '1M' },
+        { key: '3M', label: '3M' },
+        { key: 'YTD', label: 'YTD' },
+        { key: '1Y', label: '1Å' },
+        { key: 'ALL', label: 'Max' },
+    ];
+    const isCustom = value === 'CUSTOM';
+    const isYear = !isCustom && !ranges.find(r => r.key === value);
+
     return (
-        <div className="relative">
-            <select 
-                className="appearance-none pl-3 pr-8 py-1.5 h-8 text-xs font-bold rounded-md bg-white border border-gray-200 text-gray-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 w-full" 
-                value={value} 
-                onChange={e => onChange(e.target.value)}
-            >
-                {options.map(r => (
-                    <option key={r} value={r}>{r === '1M' ? '1M' : r === 'ALL' ? 'Altid' : r === 'CUSTOM' ? 'ZOOM' : r}</option>
-                ))}
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                <i className="ph ph-caret-down text-xs"></i>
-            </div>
+        <div className="flex items-center gap-1">
+            {isCustom && (
+                <button className="px-2.5 py-1 text-[11px] font-bold rounded-md bg-blue-600 text-white" onClick={() => onChange('ALL')}>
+                    ZOOM ×
+                </button>
+            )}
+            {ranges.map(r => (
+                <button
+                    key={r.key}
+                    className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${value === r.key ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}
+                    onClick={() => onChange(r.key)}
+                >
+                    {r.label}
+                </button>
+            ))}
+            {years.length > 0 && (
+                <div className="relative">
+                    <select
+                        className={`appearance-none pl-2 pr-5 py-1 text-[11px] font-bold rounded-md border-0 cursor-pointer focus:outline-none ${isYear ? 'bg-gray-800 text-white' : 'bg-transparent text-gray-500 hover:text-gray-800'}`}
+                        value={isYear ? value : ''}
+                        onChange={e => { if (e.target.value) onChange(e.target.value); }}
+                    >
+                        <option value="" disabled>{isYear ? value : 'År'}</option>
+                        {years.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1">
+                        <i className={`ph ph-caret-down text-[9px] ${isYear ? 'text-white' : 'text-gray-400'}`}></i>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -38,38 +63,34 @@ const TickerSelector = ({ tickers, selected, onChange, COLORS }) => {
         return () => window.removeEventListener('mousedown', onClick);
     }, [open]);
 
-    const label = selected.length === 0 ? 'Alle' : selected.length === 1 ? selected[0] : `${selected.length} valgt`;
     const filtered = query ? tickers.filter(t => t.toLowerCase().includes(query.toLowerCase())) : tickers;
     const toggle = (t) => onChange(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
     return (
-        <div className="relative w-full" ref={boxRef}>
-            <button type="button" className="px-3 py-1.5 h-8 text-xs font-bold rounded-md bg-white border border-gray-200 text-gray-700 flex items-center justify-between gap-2 cursor-pointer w-full hover:bg-gray-50 transition-colors" onClick={() => setOpen(o => !o)} title="Vælg flere tickers">
-                <span className="truncate">{label}</span>
-                <i className="ph ph-caret-down text-gray-500 shrink-0"></i>
+        <div className="relative" ref={boxRef}>
+            <button type="button" className="px-2.5 py-1 text-[11px] font-bold rounded-md text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-all flex items-center gap-1" onClick={() => setOpen(o => !o)}>
+                <i className="ph ph-chart-line-up"></i>
+                {selected.length > 0 && <span className="bg-blue-100 text-blue-700 px-1.5 rounded-full text-[10px]">{selected.length}</span>}
             </button>
             {open && (
-                <div className="absolute top-full left-0 mt-1 z-40 w-56 bg-white border border-gray-100 rounded-md shadow-lg">
+                <div className="absolute top-full right-0 mt-1 z-40 w-56 bg-white border border-gray-100 rounded-lg shadow-xl">
                     <div className="p-2 border-b border-gray-100">
-                        <input type="text" className="w-full px-2 py-1 text-xs border border-gray-100 rounded-md" placeholder="Søg…" value={query} onChange={e => setQuery(e.target.value)} />
+                        <input type="text" className="w-full px-2 py-1.5 text-xs border border-gray-100 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400" placeholder="Søg ticker…" value={query} onChange={e => setQuery(e.target.value)} />
                     </div>
-                    <div className="max-h-48 overflow-auto">
-                        <button className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2" onClick={() => onChange([])}>
-                            <input type="checkbox" readOnly checked={selected.length === 0} className="rounded" />
-                            <span>Alle</span>
-                        </button>
+                    <div className="max-h-48 overflow-auto p-1">
                         {filtered.map((t, i) => (
-                            <button key={t} className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center gap-2" onClick={() => toggle(t)}>
-                                <input type="checkbox" readOnly checked={selected.includes(t)} className="rounded" />
-                                <span className="flex-1">{t}</span>
-                                <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></span>
+                            <button key={t} className={`w-full text-left px-2.5 py-1.5 text-xs rounded-md flex items-center gap-2 ${selected.includes(t) ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50'}`} onClick={() => toggle(t)}>
+                                <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }}></span>
+                                <span className="flex-1 font-medium">{t}</span>
+                                {selected.includes(t) && <i className="ph ph-check text-blue-600"></i>}
                             </button>
                         ))}
                     </div>
-                    <div className="p-2 border-t border-gray-100 flex items-center justify-between">
-                        <button className="px-2 py-1 text-xs rounded-md border border-gray-100 hover:bg-gray-100" onClick={() => onChange([])}>Nulstil</button>
-                        <button className="px-2 py-1 text-xs rounded-md bg-gray-800 text-white hover:bg-gray-700" onClick={() => setOpen(false)}>Færdig</button>
-                    </div>
+                    {selected.length > 0 && (
+                        <div className="p-2 border-t border-gray-100">
+                            <button className="w-full px-2 py-1 text-xs rounded-md text-gray-500 hover:bg-gray-100" onClick={() => { onChange([]); setOpen(false); }}>Nulstil</button>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -100,7 +121,6 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 </linearGradient>
             </defs>
             
-            {/* 1. Subtler grid lines so we can afford to have more of them */}
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" opacity={1.0} />
             
             <XAxis 
@@ -113,13 +133,13 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                     const day = d.getDate();
                     const month = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec'][d.getMonth()];
                     const year = d.getFullYear();
-                    return graphRange === 'ALL' ? `${day}. ${month} ${year}` : `${day}. ${month}`;
+                    return graphRange === 'ALL' ? `${month} ${year}` : `${day}. ${month}`;
                 }} 
                 ticks={graphRange === 'ALL' ? numericYearTicks : null} 
                 axisLine={false} 
                 tickLine={false} 
                 tick={{ fontSize: 10, fill: '#9ca3af' }} 
-                minTickGap={30} 
+                minTickGap={40} 
             />
             
             <YAxis 
@@ -127,8 +147,7 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 axisLine={false} 
                 tickLine={false} 
                 domain={['auto', 'auto']} 
-             
-                tickCount={10} 
+                tickCount={8} 
                 tickFormatter={(v) => {
                     if (type !== 'value') return `${v.toFixed(0)}%`;
                     if (Math.abs(v) >= 1000000) return `${(v / 1000000).toFixed(1).replace('.0', '')}m`;
@@ -138,18 +157,22 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 tick={{ fontSize: 10, fill: '#9ca3af' }} 
             />
 
-            <Tooltip formatter={(v, n) => [type === 'value' ? formatCurrency(v) : `${v.toFixed(2)}%`, n === 'netValue' ? 'Efter Skat' : n === 'value' ? 'Før Skat' : n]} labelFormatter={(ts) => {
-                if (!ts) return '';
-                return new Date(ts).toISOString().split('T')[0];
-            }} />
+            <Tooltip 
+                formatter={(v, n) => [type === 'value' ? formatCurrency(v) : `${v.toFixed(2)}%`, n === 'netValue' ? 'Efter Skat' : n === 'value' ? (type === 'value' ? 'Før Skat' : 'Portefølje') : n === 'benchmark' ? 'Benchmark' : n]} 
+                labelFormatter={(ts) => {
+                    if (!ts) return '';
+                    const d = new Date(ts);
+                    return `${d.getDate()}. ${['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'][d.getMonth()]} ${d.getFullYear()}`;
+                }}
+                contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
+            />
             
-            {/* Highlight the 0-line more clearly to see growth vs loss */}
             <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
             
             {showYearLines && numericYearTicks.map(t => <ReferenceLine key={t} x={t} stroke="#e5e7eb" />)}
 
             {chartSelection.chart === type && chartSelection.start && chartSelection.end && !isMulti && (
-                <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill={type === 'growth' ? "#10b981" : "#2563eb"} fillOpacity={0.1} />
+                <ReferenceArea x1={Math.min(chartSelection.start, chartSelection.end)} x2={Math.max(chartSelection.start, chartSelection.end)} strokeOpacity={0.1} fill={type === 'growth' ? "#10b981" : "#2563eb"} fillOpacity={0.08} />
             )}
 
             {isMulti ? selectedTickers.map((t, i) => (
@@ -166,13 +189,73 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 ) : (
                     <>
                         <Area type="monotone" dataKey="value" stroke="#10b981" strokeWidth={1.5} fill="url(#colorGrowth)" isAnimationActive={false} />
-                        {settings.benchmarkTicker && <Area type="monotone" dataKey="benchmark" stroke="#f59e0b" strokeWidth={1} fill="none" isAnimationActive={false} />}
+                        {settings.benchmarkTicker && <Area type="monotone" dataKey="benchmark" name="benchmark" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3 3" fill="none" isAnimationActive={false} />}
                     </>
                 )
             )}
         </AreaChart>
     </ResponsiveContainer>
 );
+
+// --- Year-over-Year Chart ---
+const YOY_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#f43f5e', '#0ea5e9', '#84cc16', '#d946ef'];
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec'];
+
+const YearOverYearChart = ({ yoyData, selectedYears, years }) => {
+    if (!yoyData || !yoyData.data || yoyData.data.length === 0) {
+        return <div className="h-full flex items-center justify-center text-gray-400 text-sm italic">Ingen data</div>;
+    }
+    
+    const displayYears = selectedYears.length > 0 ? selectedYears : yoyData.years;
+    
+    return (
+        <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={yoyData.data}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis 
+                    dataKey="dayOfYear" 
+                    type="number" 
+                    domain={[0, 365]} 
+                    tickFormatter={(d) => MONTH_LABELS[Math.floor(d / 30.44)] || ''}
+                    ticks={[0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]}
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fontSize: 10, fill: '#9ca3af' }} 
+                />
+                <YAxis 
+                    width={45} 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tickFormatter={(v) => `${v.toFixed(0)}%`} 
+                    tick={{ fontSize: 10, fill: '#9ca3af' }} 
+                />
+                <Tooltip 
+                    formatter={(v, name) => [`${v.toFixed(2)}%`, name]}
+                    labelFormatter={(d) => {
+                        const month = MONTH_LABELS[Math.floor(d / 30.44)] || '';
+                        const dayInMonth = Math.round(d % 30.44) + 1;
+                        return `~${dayInMonth}. ${month}`;
+                    }}
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.05)' }}
+                />
+                <ReferenceLine y={0} stroke="#d1d5db" strokeWidth={1} />
+                {displayYears.map((year, i) => (
+                    <Line 
+                        key={year} 
+                        type="monotone" 
+                        dataKey={year} 
+                        stroke={YOY_COLORS[i % YOY_COLORS.length]} 
+                        strokeWidth={year === String(new Date().getFullYear()) ? 2.5 : 1.5}
+                        strokeOpacity={year === String(new Date().getFullYear()) ? 1 : 0.7}
+                        dot={false} 
+                        isAnimationActive={false} 
+                    />
+                ))}
+            </LineChart>
+        </ResponsiveContainer>
+    );
+};
+
 // --- Main Component ---
 const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketData, uniqueTickers, years }) => {
     const [graphRange, setGraphRange] = useState('ALL');
@@ -180,7 +263,12 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
     const [chartSelection, setChartSelection] = useState({ start: null, end: null, chart: null, dragging: false });
     const [fullscreenChart, setFullscreenChart] = useState(null);
     const [selectedTickers, setSelectedTickers] = useState([]);
-    const [showMobileGraphMenu, setShowMobileGraphMenu] = useState(false);
+    
+    // Chart mode: 'growth' | 'value' | 'yoy'
+    const [chartMode, setChartMode] = useState('growth');
+    
+    // Year-over-year: which years to highlight
+    const [yoySelectedYears, setYoySelectedYears] = useState([]);
     
     // UI Setting: Default to NOT showing gross value
     const [showGross, setShowGross] = useState(false);
@@ -191,7 +279,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
 
     // Use Custom Hook for Data Logic
     const { 
-        todayStats, numericValueData, numericGrowthData, getFxRate, getPositionValueWithPrev 
+        todayStats, numericValueData, numericGrowthData, yoyData, getFxRate, getPositionValueWithPrev 
     } = useDashboardChartData(calc, marketData, settings, graphRange, customRange, selectedTickers);
 
     // --- Chart Formatters ---
@@ -224,14 +312,13 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
     // Benchmarks List
     const BENCHMARKS = [
         { label: 'Ingen', ticker: '' },
-        { label: 'All Country World', ticker: 'SPYY.DE' },
-        { label: 'Developed World', ticker: 'URTH' },
-        { label: 'Europe', ticker: 'XEU.TO' },
+        { label: 'ACWI', ticker: 'SPYY.DE' },
+        { label: 'World', ticker: 'URTH' },
+        { label: 'Europa', ticker: 'XEU.TO' },
         { label: 'S&P 500', ticker: '^GSPC' },
-        { label: 'NASDAQ 100', ticker: '^NDX' },
+        { label: 'NASDAQ', ticker: '^NDX' },
         { label: 'Dow Jones', ticker: '^DJI' },
-        { label: 'DK C25', ticker: '^OMXC25' },
-        { label: 'Nvidia', ticker: 'NVDA' }
+        { label: 'C25', ticker: '^OMXC25' },
     ];
     const benchLabel = (BENCHMARKS.find(b => b.ticker === settings.benchmarkTicker) || BENCHMARKS[0]).label;
     const isMulti = selectedTickers.length > 1;
@@ -260,8 +347,8 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
         }
     };
 
-    // --- Overlay Zoom Logic ---
-    const renderZoomOverlay = (type, data) => {
+    // --- Zoom Selection Strip (below chart, not floating over it) ---
+    const renderZoomStrip = (type, data) => {
         if (chartSelection.chart !== type || !chartSelection.start || !chartSelection.end || isMulti) return null;
         const startTs = Math.min(chartSelection.start, chartSelection.end);
         const endTs = Math.max(chartSelection.start, chartSelection.end);
@@ -272,21 +359,39 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
         const abs = endVal - startVal;
         const pct = startVal > 0 ? (abs / startVal) * 100 : 0;
 
+        const startDate = new Date(startTs);
+        const endDate = new Date(endTs);
+        const fmtDate = (d) => `${d.getDate()}/${d.getMonth() + 1}`;
+
         return (
-            <div className="absolute top-2 right-2 bg-white/95 backdrop-blur rounded-md border border-gray-200 shadow-sm px-3 py-2 flex items-center gap-2 z-10">
-                <div className={`text-sm font-mono ${abs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{abs >= 0 ? '+' : ''}{type === 'growth' ? `${abs.toFixed(2)}%` : formatCurrencyNoDecimals(abs)}</div>
-                {type === 'value' && <div className={`text-xs font-mono ${pct >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>({pct.toFixed(2)}%)</div>}
-                <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => {
-                    setCustomRange({ startIso: new Date(startTs).toISOString().split('T')[0], endIso: new Date(endTs).toISOString().split('T')[0] });
-                    setGraphRange('CUSTOM');
-                    setChartSelection({ start: null, end: null, chart: null, dragging: false });
-                }}>Zoom ind</button>
-                <button className="text-xs px-2 py-1 rounded-md border border-gray-200 hover:bg-gray-100" onClick={() => setChartSelection({ start: null, end: null, chart: null, dragging: false })}>Ryd</button>
+            <div className="mt-2 px-3 py-2 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-gray-500">
+                    <span className="font-medium">{fmtDate(startDate)} → {fmtDate(endDate)}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                    <span className={`font-bold font-mono ${abs >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {abs >= 0 ? '+' : ''}{type === 'growth' ? `${abs.toFixed(2)}%` : formatCurrencyNoDecimals(abs)}
+                        {type === 'value' && <span className="ml-1 font-normal">({pct >= 0 ? '+' : ''}{pct.toFixed(1)}%)</span>}
+                    </span>
+                    <button className="px-2 py-0.5 rounded border border-gray-200 hover:bg-white text-gray-600 font-medium" onClick={() => {
+                        setCustomRange({ startIso: new Date(startTs).toISOString().split('T')[0], endIso: new Date(endTs).toISOString().split('T')[0] });
+                        setGraphRange('CUSTOM');
+                        setChartSelection({ start: null, end: null, chart: null, dragging: false });
+                    }}>
+                        <i className="ph ph-magnifying-glass-plus mr-1"></i>Zoom
+                    </button>
+                    <button className="px-2 py-0.5 rounded border border-gray-200 hover:bg-white text-gray-400" onClick={() => setChartSelection({ start: null, end: null, chart: null, dragging: false })}>
+                        <i className="ph ph-x"></i>
+                    </button>
+                </div>
             </div>
         );
     };
 
-    const commonBtnClass = "h-8 w-8 flex items-center justify-center rounded-md border border-gray-200 bg-white text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors";
+    // Toggle a YOY year
+    const toggleYoyYear = (year) => {
+        setYoySelectedYears(prev => prev.includes(year) ? prev.filter(y => y !== year) : [...prev, year]);
+    };
 
     return (
         <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
@@ -301,34 +406,32 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
             {fullscreenChart && (
                 <ModalPortal onBackdropClick={() => setFullscreenChart(null)} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-0 bg-black/60">
                     <div className="w-screen h-screen bg-white flex flex-col" onClick={e => e.stopPropagation()}>
-                        <div className="h-12 px-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
-                            <div className="flex items-center gap-2">
-                                <i className="ph ph-arrows-in text-blue-600"></i>
-                                <span className="font-bold text-sm text-gray-800">{fullscreenChart === 'growth' ? 'Afkast (%)' : 'Værdi'}</span>
-                                {fullscreenChart === 'growth' && (!isMulti && settings.benchmarkTicker) && (() => {
+                        <div className="h-14 px-4 border-b border-gray-200 flex items-center justify-between bg-white">
+                            <div className="flex items-center gap-3">
+                                <RangeSelector value={graphRange} onChange={setGraphRange} years={years} />
+                                {fullscreenChart === 'growth' && !isMulti && settings.benchmarkTicker && (() => {
                                     const last = numericGrowthData[numericGrowthData.length - 1];
                                     const diff = (last?.value ?? 0) - (last?.benchmark ?? 0);
                                     if (!isFinite(diff)) return null;
-                                    return <span className={`ml-2 text-xs font-mono px-2 py-0.5 rounded ${diff >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>vs {benchLabel}: {diff >= 0 ? '+' : ''}{diff.toFixed(2)}%</span>
+                                    return <span className={`text-xs font-mono px-2 py-0.5 rounded ${diff >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>vs {benchLabel}: {diff >= 0 ? '+' : ''}{diff.toFixed(2)}%</span>;
                                 })()}
                             </div>
                             <div className="flex items-center gap-2">
-                                <div className="w-[80px] sm:w-[100px]"><RangeSelector value={graphRange} onChange={setGraphRange} years={years} /></div>
-                                <div className="w-[120px] sm:w-[200px]"><TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} /></div>
-                                
-                                {fullscreenChart === 'value' && (
-                                     <button className={commonBtnClass} onClick={() => setShowGross(!showGross)} title={showGross ? "Skjul Brutto Værdi" : "Vis Brutto Værdi"}>
-                                         <i className={`ph ${showGross ? 'ph-eye' : 'ph-eye-slash'}`}></i>
-                                     </button>
+                                <TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} />
+                                {fullscreenChart === 'growth' && (
+                                    <select className="px-2 py-1 text-[11px] font-bold rounded-md bg-gray-50 border border-gray-200 cursor-pointer focus:outline-none" value={settings.benchmarkTicker} onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}>
+                                        {BENCHMARKS.map(b => (<option key={b.ticker} value={b.ticker}>{b.label}</option>))}
+                                    </select>
                                 )}
-                                
-                                <select className="px-3 py-1.5 h-8 text-xs font-bold rounded-md bg-white border border-gray-200 cursor-pointer max-w-[100px] sm:max-w-none truncate focus:outline-none focus:ring-2 focus:ring-blue-500" value={settings.benchmarkTicker} onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}>
-                                    {BENCHMARKS.map(b => (<option key={b.ticker} value={b.ticker}>{b.label}</option>))}
-                                </select>
-                                <button className="px-3 py-1.5 h-8 text-xs rounded-md border border-gray-200 hover:bg-gray-100 font-medium" onClick={() => setFullscreenChart(null)}>Luk</button>
+                                {fullscreenChart === 'value' && (
+                                    <button className={`px-2 py-1 text-[11px] font-bold rounded-md ${showGross ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'}`} onClick={() => setShowGross(!showGross)}>
+                                        Brutto
+                                    </button>
+                                )}
+                                <button className="px-3 py-1.5 text-xs rounded-md bg-gray-800 text-white hover:bg-gray-700 font-medium" onClick={() => setFullscreenChart(null)}>Luk</button>
                             </div>
                         </div>
-                        <div className="flex-1 relative">
+                        <div className="flex-1 p-4">
                             <CommonChart 
                                 type={fullscreenChart} 
                                 data={fullscreenChart === 'growth' ? numericGrowthData : numericValueData}
@@ -343,13 +446,13 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                 settings={settings}
                                 showGross={showGross}
                             />
-                            {renderZoomOverlay(fullscreenChart, fullscreenChart === 'growth' ? numericGrowthData : numericValueData)}
                         </div>
+                        {renderZoomStrip(fullscreenChart, fullscreenChart === 'growth' ? numericGrowthData : numericValueData)}
                     </div>
                 </ModalPortal>
             )}
 
-            {/* --- CARDS (Removed Gross Value Card) --- */}
+            {/* --- CARDS --- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
                 <div onClick={() => toggleModal('liquidation', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi efter skat</div>
@@ -372,81 +475,169 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
 
             {/* --- CHARTS LAYOUT --- */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <div className="lg:col-span-2 space-y-8">
-                    {/* Growth Chart */}
-                    <div className="bg-white p-4 rounded-xl shadow-sm relative">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="font-bold text-gray-800 text-sm uppercase">Afkast (%)</h3>
-                            <div className="flex items-center gap-2">
-                                <div className="hidden md:flex items-center gap-2">
-                                    <div className="w-[100px]"><RangeSelector value={graphRange} onChange={setGraphRange} years={years} /></div>
-                                    <div className="w-[180px]"><TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} /></div>
-                                    <div className="w-[120px]">
-                                        <select className="px-3 py-1.5 h-8 text-xs font-bold rounded-md bg-white border border-gray-200 cursor-pointer w-full focus:outline-none focus:ring-2 focus:ring-blue-500" value={settings.benchmarkTicker} onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}>
-                                            {BENCHMARKS.map(b => (<option key={b.ticker} value={b.ticker}>{b.label}</option>))}
-                                        </select>
-                                    </div>
+                <div className="lg:col-span-2 space-y-6">
+                    
+                    {/* Chart Container */}
+                    <div className="bg-white p-4 rounded-xl shadow-sm">
+                        {/* Chart Mode Tabs + Controls */}
+                        <div className="flex flex-col gap-3 mb-4">
+                            <div className="flex items-center justify-between">
+                                {/* Mode tabs */}
+                                <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+                                    {[
+                                        { key: 'growth', label: 'Afkast', icon: 'ph-trend-up' },
+                                        { key: 'value', label: 'Værdi', icon: 'ph-chart-line' },
+                                        { key: 'yoy', label: 'År vs. År', icon: 'ph-calendar-blank' },
+                                    ].map(tab => (
+                                        <button
+                                            key={tab.key}
+                                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${chartMode === tab.key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                            onClick={() => setChartMode(tab.key)}
+                                        >
+                                            <i className={`ph ${tab.icon} text-sm`}></i>
+                                            <span className="hidden sm:inline">{tab.label}</span>
+                                        </button>
+                                    ))}
                                 </div>
-                                <button className="md:hidden p-2 rounded-md border" onClick={() => setShowMobileGraphMenu(!showMobileGraphMenu)}><i className="ph ph-sliders-horizontal text-lg"></i></button>
-                                <button className={commonBtnClass} onClick={() => setFullscreenChart('growth')}><i className="ph ph-arrows-out text-lg"></i></button>
+
+                                {/* Right actions */}
+                                <div className="flex items-center gap-1">
+                                    {chartMode !== 'yoy' && (
+                                        <TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} />
+                                    )}
+                                    {chartMode === 'value' && (
+                                        <button 
+                                            className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all ${showGross ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`} 
+                                            onClick={() => setShowGross(!showGross)}
+                                            title={showGross ? "Skjul brutto" : "Vis brutto"}
+                                        >
+                                            <i className={`ph ${showGross ? 'ph-eye' : 'ph-eye-slash'}`}></i>
+                                        </button>
+                                    )}
+                                    <button 
+                                        className="px-2 py-1 text-[11px] rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all" 
+                                        onClick={() => setFullscreenChart(chartMode === 'yoy' ? 'growth' : chartMode)}
+                                    >
+                                        <i className="ph ph-arrows-out text-sm"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Controls row */}
+                            <div className="flex items-center justify-between">
+                                {chartMode !== 'yoy' ? (
+                                    <RangeSelector value={graphRange} onChange={setGraphRange} years={years} />
+                                ) : (
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                        {(yoyData?.years || []).map((year, i) => (
+                                            <button
+                                                key={year}
+                                                className={`px-2 py-0.5 text-[11px] font-bold rounded-md transition-all border ${
+                                                    yoySelectedYears.length === 0 || yoySelectedYears.includes(year) 
+                                                        ? 'border-transparent text-white' 
+                                                        : 'border-gray-200 text-gray-400 hover:text-gray-600 bg-white'
+                                                }`}
+                                                style={yoySelectedYears.length === 0 || yoySelectedYears.includes(year) ? { backgroundColor: YOY_COLORS[i % YOY_COLORS.length] } : {}}
+                                                onClick={() => toggleYoyYear(year)}
+                                            >
+                                                {year}
+                                            </button>
+                                        ))}
+                                        {yoySelectedYears.length > 0 && (
+                                            <button className="px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-gray-600 rounded" onClick={() => setYoySelectedYears([])}>Vis alle</button>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* Benchmark selector (only for growth mode) */}
+                                {chartMode === 'growth' && !isMulti && (
+                                    <div className="flex items-center gap-1">
+                                        {BENCHMARKS.slice(0, 5).map(b => (
+                                            <button
+                                                key={b.ticker}
+                                                className={`px-2 py-0.5 text-[10px] font-bold rounded transition-all ${
+                                                    settings.benchmarkTicker === b.ticker 
+                                                        ? (b.ticker ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500')
+                                                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                                                }`}
+                                                onClick={() => { setSettings(s => ({ ...s, benchmarkTicker: b.ticker })); if (b.ticker) fetchMarketData(true); }}
+                                            >
+                                                {b.label}
+                                            </button>
+                                        ))}
+                                        <div className="relative">
+                                            <select
+                                                className="appearance-none pl-1.5 pr-4 py-0.5 text-[10px] font-bold rounded bg-transparent text-gray-400 cursor-pointer focus:outline-none hover:text-gray-600"
+                                                value={BENCHMARKS.slice(5).find(b => b.ticker === settings.benchmarkTicker) ? settings.benchmarkTicker : ''}
+                                                onChange={e => { if (e.target.value !== undefined) { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}}
+                                            >
+                                                <option value="" disabled>Mere…</option>
+                                                {BENCHMARKS.slice(5).map(b => <option key={b.ticker} value={b.ticker}>{b.label}</option>)}
+                                            </select>
+                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-0.5">
+                                                <i className="ph ph-dots-three text-[10px] text-gray-400"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
-                        {showMobileGraphMenu && (
-                            <div className="md:hidden mb-4 p-4 bg-gray-50 border rounded-lg flex flex-col gap-3">
-                                <div><span className="text-[10px] uppercase font-bold text-gray-400 block mb-1">Tid</span><RangeSelector value={graphRange} onChange={setGraphRange} years={years} /></div>
-                                <div><span className="text-[10px] uppercase font-bold text-gray-400 block mb-1">Papirer</span><TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} /></div>
+
+                        {/* Chart area */}
+                        <div className="h-72 w-full">
+                            {chartMode === 'yoy' ? (
+                                <YearOverYearChart yoyData={yoyData} selectedYears={yoySelectedYears} years={years} />
+                            ) : (
+                                <CommonChart 
+                                    type={chartMode} 
+                                    data={chartMode === 'growth' ? numericGrowthData : numericValueData}
+                                    chartSelection={chartSelection}
+                                    onChartMouse={handleChartMouse}
+                                    isMulti={isMulti}
+                                    selectedTickers={selectedTickers}
+                                    COLORS={COLORS}
+                                    graphRange={graphRange}
+                                    numericYearTicks={numericYearTicks}
+                                    showYearLines={showYearLines}
+                                    settings={settings}
+                                    showGross={showGross}
+                                />
+                            )}
+                        </div>
+
+                        {/* Zoom strip below chart */}
+                        {chartMode !== 'yoy' && renderZoomStrip(chartMode, chartMode === 'growth' ? numericGrowthData : numericValueData)}
+                        
+                        {/* Benchmark comparison note */}
+                        {chartMode === 'growth' && !isMulti && settings.benchmarkTicker && (() => {
+                            const last = numericGrowthData[numericGrowthData.length - 1];
+                            if (!last) return null;
+                            const portfolio = last.value ?? 0;
+                            const bench = last.benchmark ?? 0;
+                            const diff = portfolio - bench;
+                            if (!isFinite(diff)) return null;
+                            return (
+                                <div className="mt-2 flex items-center gap-3 text-xs text-gray-500">
+                                    <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded bg-emerald-500"></span>Portefølje: <span className="font-mono font-medium text-gray-700">{portfolio.toFixed(2)}%</span></span>
+                                    <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded bg-amber-500 opacity-70" style={{borderTop: '1px dashed'}}></span>{benchLabel}: <span className="font-mono font-medium text-gray-700">{bench.toFixed(2)}%</span></span>
+                                    <span className={`font-mono font-bold ${diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{diff >= 0 ? '+' : ''}{diff.toFixed(2)}%</span>
+                                </div>
+                            );
+                        })()}
+
+                        {/* Active ticker chips */}
+                        {selectedTickers.length > 0 && chartMode !== 'yoy' && (
+                            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                                {selectedTickers.map((t, i) => (
+                                    <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-600">
+                                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></span>
+                                        {t}
+                                        <button className="ml-0.5 text-gray-400 hover:text-gray-600" onClick={() => setSelectedTickers(prev => prev.filter(x => x !== t))}>×</button>
+                                    </span>
+                                ))}
+                                <button className="text-[10px] text-gray-400 hover:text-gray-600 px-1" onClick={() => setSelectedTickers([])}>Ryd alle</button>
                             </div>
                         )}
-                        <div className="h-64 w-full relative">
-                            <CommonChart 
-                                type="growth" 
-                                data={numericGrowthData}
-                                chartSelection={chartSelection}
-                                onChartMouse={handleChartMouse}
-                                isMulti={isMulti}
-                                selectedTickers={selectedTickers}
-                                COLORS={COLORS}
-                                graphRange={graphRange}
-                                numericYearTicks={numericYearTicks}
-                                showYearLines={showYearLines}
-                                settings={settings}
-                            />
-                            {renderZoomOverlay('growth', numericGrowthData)}
-                        </div>
-                    </div>
-
-                    {/* Value Chart */}
-                    <div className="bg-white p-4 rounded-xl shadow-sm relative">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="font-bold text-gray-800 text-sm uppercase">Værdi</h3>
-                            <div className="flex items-center gap-2">
-                                <div className="hidden md:flex items-center gap-2">
-                                    <div className="w-[100px]"><RangeSelector value={graphRange} onChange={setGraphRange} years={years} /></div>
-                                    <div className="w-[180px]"><TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} /></div>
-                                </div>
-                                <button className={commonBtnClass} onClick={() => setShowGross(!showGross)} title={showGross ? "Skjul Brutto Værdi" : "Vis Brutto Værdi"}>
-                                    <i className={`ph ${showGross ? 'ph-eye' : 'ph-eye-slash'}`}></i>
-                                </button>
-                                <button className={commonBtnClass} onClick={() => setFullscreenChart('value')}><i className="ph ph-arrows-out text-lg"></i></button>
-                            </div>
-                        </div>
-                        <div className="h-64 w-full relative">
-                            <CommonChart 
-                                type="value" 
-                                data={numericValueData}
-                                chartSelection={chartSelection}
-                                onChartMouse={handleChartMouse}
-                                isMulti={isMulti}
-                                selectedTickers={selectedTickers}
-                                COLORS={COLORS}
-                                graphRange={graphRange}
-                                numericYearTicks={numericYearTicks}
-                                showYearLines={showYearLines}
-                                settings={settings}
-                                showGross={showGross}
-                            />
-                            {renderZoomOverlay('value', numericValueData)}
-                        </div>
                     </div>
                 </div>
 
@@ -458,7 +649,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                         </div>
                         <div className="divide-y divide-gray-100">
                             {(!calc.yearlyStats || calc.yearlyStats.length === 0) ? <div className="p-8 text-center text-gray-400 italic">Ingen data</div> : calc.yearlyStats.map(stat => (
-                                <div key={stat.year} className="p-4 hover:bg-gray-50 transition-colors">
+                                <div key={stat.year} className="p-4 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => { setChartMode('growth'); setGraphRange(String(stat.year)); }}>
                                     <div className="flex justify-between items-center mb-1">
                                         <span className="font-bold text-gray-900 text-lg">{stat.year}</span>
                                         <span className={`font-bold text-lg ${stat.return >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{stat.return > 0 ? '+' : ''}{stat.return.toFixed(2)}%</span>
@@ -483,7 +674,9 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                     <div className="p-4 border-b border-gray-100 bg-gray-50"><h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Afkast pr. år</h3></div>
                     <div className="divide-y divide-gray-100">
                         {(calc.yearlyStats || []).map(stat => (
-                            <div key={stat.year} className="p-4 hover:bg-gray-50"><div className="flex justify-between"><span className="font-bold">{stat.year}</span><span className={stat.return >= 0 ? 'text-green-600' : 'text-red-600'}>{stat.return.toFixed(2)}%</span></div></div>
+                            <div key={stat.year} className="p-4 hover:bg-gray-50 cursor-pointer" onClick={() => { setChartMode('growth'); setGraphRange(String(stat.year)); }}>
+                                <div className="flex justify-between"><span className="font-bold">{stat.year}</span><span className={stat.return >= 0 ? 'text-emerald-600' : 'text-rose-600'}>{stat.return > 0 ? '+' : ''}{stat.return.toFixed(2)}%</span></div>
+                            </div>
                         ))}
                     </div>
                 </div>

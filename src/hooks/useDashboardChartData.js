@@ -101,8 +101,12 @@ export default function useDashboardChartData(calc, marketData, settings, graphR
 
             if (graphRange === '1M') {
                 startDate.setMonth(now.getMonth() - 1);
+            } else if (graphRange === '3M') {
+                startDate.setMonth(now.getMonth() - 3);
             } else if (graphRange === 'YTD') {
                 startDate = new Date(now.getFullYear(), 0, 1);
+            } else if (graphRange === '1Y') {
+                startDate.setFullYear(now.getFullYear() - 1);
             } else if (!isNaN(Number(graphRange))) {
                 startDate = new Date(Number(graphRange), 0, 1);
                 endDate = new Date(Number(graphRange), 11, 31);
@@ -195,13 +199,58 @@ export default function useDashboardChartData(calc, marketData, settings, graphR
 
         const numericGrowthData = mergedGrowthData.map(d => ({ ...d, date: toUnix(d.date) }));
 
-        return { numericValueData, numericGrowthData };
+        // Year-over-year comparison data: normalize each year's growth to start at 0 on Jan 1
+        const yoyData = (() => {
+            const baseGrowthAll = calc.growthGraphData || [];
+            if (baseGrowthAll.length === 0) return [];
+            
+            // Group by year
+            const byYear = {};
+            baseGrowthAll.forEach(d => {
+                const year = d.date.substring(0, 4);
+                if (!byYear[year]) byYear[year] = [];
+                byYear[year].push(d);
+            });
+            
+            // For each year, normalize to start at 0 and map date to day-of-year
+            const yearKeys = Object.keys(byYear).sort();
+            const merged = [];
+            
+            yearKeys.forEach(year => {
+                const pts = byYear[year];
+                if (pts.length === 0) return;
+                const baseVal = pts[0].value;
+                const baseMult = (baseVal / 100) + 1;
+                
+                pts.forEach(d => {
+                    const dt = new Date(d.date);
+                    const startOfYear = new Date(dt.getFullYear(), 0, 1);
+                    const dayOfYear = Math.floor((dt - startOfYear) / 86400000);
+                    
+                    const curMult = (d.value / 100) + 1;
+                    const normalized = ((curMult / baseMult) - 1) * 100;
+                    
+                    let row = merged.find(r => r.dayOfYear === dayOfYear);
+                    if (!row) {
+                        row = { dayOfYear };
+                        merged.push(row);
+                    }
+                    row[year] = normalized;
+                });
+            });
+            
+            merged.sort((a, b) => a.dayOfYear - b.dayOfYear);
+            return { data: merged, years: yearKeys };
+        })();
+
+        return { numericValueData, numericGrowthData, yoyData };
     }, [calc, marketData, settings.benchmarkTicker, selectedTickers, getFilteredData]);
 
     return { 
         todayStats, 
         numericValueData: chartData.numericValueData, 
         numericGrowthData: chartData.numericGrowthData,
+        yoyData: chartData.yoyData,
         getFxRate,
         getPositionValueWithPrev
     };
