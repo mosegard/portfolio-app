@@ -18,7 +18,7 @@ const RangeSelector = ({ value, onChange, years }) => {
     const isYear = !isCustom && !ranges.find(r => r.key === value);
 
     return (
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap min-w-0">
             {isCustom && (
                 <button className="px-2.5 py-1 text-[11px] font-bold rounded-md bg-blue-600 text-white" onClick={() => onChange('ALL')}>
                     ZOOM ×
@@ -524,7 +524,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                             </div>
 
                             {/* Controls row */}
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
                                 {chartMode !== 'yoy' ? (
                                     <RangeSelector value={graphRange} onChange={setGraphRange} years={years} />
                                 ) : (
@@ -551,7 +551,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
 
                                 {/* Benchmark selector (only for growth mode) */}
                                 {chartMode === 'growth' && !isMulti && (
-                                    <div className="relative">
+                                    <div className="relative shrink-0 ml-auto">
                                         <select
                                             className={`appearance-none pl-2 pr-6 py-0.5 text-[10px] font-bold rounded-md border cursor-pointer focus:outline-none ${
                                                 settings.benchmarkTicker ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-gray-200 text-gray-500'
