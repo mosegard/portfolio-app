@@ -97,6 +97,53 @@ const TickerSelector = ({ tickers, selected, onChange, COLORS }) => {
     );
 };
 
+// --- Animated Value Component ---
+const AnimatedValue = ({ value, formatter, className = "", showTrend = true, suffix = null }) => {
+    const [display, setDisplay] = useState(value);
+    const [diff, setDiff] = useState(0);
+
+    useEffect(() => {
+        if (value === display) return;
+        const startVal = display;
+        const endVal = value;
+        const diffVal = endVal - startVal;
+        
+        setDiff(diffVal);
+        
+        const duration = 1000;
+        const start = performance.now();
+        
+        let req;
+        const tick = (now) => {
+            const p = Math.min((now - start) / duration, 1);
+            const ease = 1 - Math.pow(1 - p, 4); // easeOutQuart
+            setDisplay(startVal + (endVal - startVal) * ease);
+            if (p < 1) req = requestAnimationFrame(tick);
+            else setDisplay(endVal);
+        };
+        req = requestAnimationFrame(tick);
+        
+        const timer = setTimeout(() => setDiff(0), 4000);
+        return () => { cancelAnimationFrame(req); clearTimeout(timer); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value]);
+
+    return (
+        <div className={`flex items-center ${className}`}>
+            <span>
+                {formatter ? formatter(display) : display}
+                {suffix}
+            </span>
+            {showTrend && Math.abs(diff) > 0.01 && (
+                <span className={`ml-2 flex items-center text-sm font-bold animate-in slide-in-from-bottom-2 fade-in duration-300 ${diff > 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                    <i className={`ph ${diff > 0 ? 'ph-arrow-up-right' : 'ph-arrow-down-right'}`}></i>
+                    {formatter ? formatter(Math.abs(diff)) : Math.abs(diff).toFixed(2)}
+                </span>
+            )}
+        </div>
+    );
+};
+
 // --- Updated Shared Chart Component ---
 const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, selectedTickers, COLORS, graphRange, numericYearTicks, showYearLines, settings, showGross, showInvested }) => (
     <ResponsiveContainer width="100%" height="100%">
@@ -465,19 +512,26 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
                 <div onClick={() => toggleModal('liquidation', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi efter skat</div>
-                    <div className="mt-2"><div className="text-3xl font-bold text-gray-900 tracking-tight">{formatCurrencyNoDecimals(calc.currentVal - calc.currentTax)}</div></div>
+                    <div className="mt-2 text-3xl font-bold text-gray-900 tracking-tight">
+                        <AnimatedValue value={calc.currentVal - calc.currentTax} formatter={formatCurrencyNoDecimals} />
+                    </div>
                 </div>
                 <div onClick={() => toggleModal('gain', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-trend-up"></i>Samlet gevinst</div>
-                    <div className="mt-2"><div className={`text-3xl font-bold tracking-tight ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(allTimeGain)}</div></div>
+                    <div className={`mt-2 text-3xl font-bold tracking-tight ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        <AnimatedValue value={allTimeGain} formatter={formatCurrencyNoDecimals} />
+                    </div>
                 </div>
                 <div onClick={() => toggleModal('movers', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-arrow-up-right"></i>Gevinst/Tab i dag</div>
-                    <div className="mt-2">
-                        <div className={`text-3xl font-bold tracking-tight ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayStats.todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
-                            {todayStats.activeCount > 0 ? formatCurrencyNoDecimals(todayStats.todayGain) : "0 kr."}
-                            <span className="text-lg font-bold ml-2 align-middle">{todayStats.activeCount > 0 ? `${todayStats.todayPct.toFixed(2)}%` : ""}</span>
-                        </div>
+                    <div className={`mt-2 text-3xl font-bold tracking-tight ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayStats.todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
+                        {todayStats.activeCount > 0 ? (
+                            <AnimatedValue 
+                                value={todayStats.todayGain} 
+                                formatter={formatCurrencyNoDecimals} 
+                                suffix={<span className="text-lg font-bold ml-2 align-middle"><AnimatedValue value={todayStats.todayPct} formatter={v => `${v.toFixed(2)}%`} showTrend={false} className="inline-flex" /></span>}
+                            />
+                        ) : "0 kr."}
                     </div>
                 </div>
             </div>
