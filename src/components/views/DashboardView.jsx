@@ -98,7 +98,7 @@ const TickerSelector = ({ tickers, selected, onChange, COLORS }) => {
 };
 
 // --- Updated Shared Chart Component ---
-const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, selectedTickers, COLORS, graphRange, numericYearTicks, showYearLines, settings, showGross }) => (
+const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, selectedTickers, COLORS, graphRange, numericYearTicks, showYearLines, settings, showGross, showInvested }) => (
     <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data}
             onMouseDown={e => onChartMouse(e, type, 'down')}
@@ -180,7 +180,9 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
             )) : (
                 type === 'value' ? (
                     <>
-                        <Area type="step" dataKey="invested" name="Indskud" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
+                        {showInvested && (
+                            <Area type="step" dataKey="invested" name="Indskud" stroke="#9ca3af" strokeWidth={1} strokeDasharray="4 4" fill="none" isAnimationActive={false} />
+                        )}
                         {showGross && (
                             <Area type="monotone" dataKey="value" name="value" stroke="#3b82f6" strokeWidth={1.5} fill="url(#colorVal)" isAnimationActive={false} />
                         )}
@@ -272,6 +274,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
     
     // UI Setting: Default to NOT showing gross value
     const [showGross, setShowGross] = useState(false);
+    const [showInvested, setShowInvested] = useState(false);
     
     // Modal Visibility State
     const [modals, setModals] = useState({ movers: false, liquidation: false, allocation: false, gain: false });
@@ -424,9 +427,14 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                     </select>
                                 )}
                                 {fullscreenChart === 'value' && (
-                                    <button className={`px-2 py-1 text-[11px] font-bold rounded-md ${showGross ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'}`} onClick={() => setShowGross(!showGross)}>
-                                        Brutto
-                                    </button>
+                                    <>
+                                        <button className={`px-2 py-1 text-[11px] font-bold rounded-md ${showInvested ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'}`} onClick={() => setShowInvested(!showInvested)}>
+                                            Indskud
+                                        </button>
+                                        <button className={`px-2 py-1 text-[11px] font-bold rounded-md ${showGross ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-100'}`} onClick={() => setShowGross(!showGross)}>
+                                            Brutto
+                                        </button>
+                                    </>
                                 )}
                                 <button className="px-3 py-1.5 text-xs rounded-md bg-gray-800 text-white hover:bg-gray-700 font-medium" onClick={() => setFullscreenChart(null)}>Luk</button>
                             </div>
@@ -445,6 +453,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                 showYearLines={showYearLines}
                                 settings={settings}
                                 showGross={showGross}
+                                showInvested={showInvested}
                             />
                         </div>
                         {renderZoomStrip(fullscreenChart, fullscreenChart === 'growth' ? numericGrowthData : numericValueData)}
@@ -506,13 +515,22 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                         <TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} />
                                     )}
                                     {chartMode === 'value' && (
-                                        <button 
-                                            className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all ${showGross ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`} 
-                                            onClick={() => setShowGross(!showGross)}
-                                            title={showGross ? "Skjul brutto" : "Vis brutto"}
-                                        >
-                                            <i className={`ph ${showGross ? 'ph-eye' : 'ph-eye-slash'}`}></i>
-                                        </button>
+                                        <>
+                                            <button 
+                                                className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all ${showInvested ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`} 
+                                                onClick={() => setShowInvested(!showInvested)}
+                                                title={showInvested ? "Skjul indskud" : "Vis indskud"}
+                                            >
+                                                <i className="ph ph-wallet"></i>
+                                            </button>
+                                            <button 
+                                                className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all ${showGross ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`} 
+                                                onClick={() => setShowGross(!showGross)}
+                                                title={showGross ? "Skjul brutto" : "Vis brutto"}
+                                            >
+                                                <i className={`ph ${showGross ? 'ph-eye' : 'ph-eye-slash'}`}></i>
+                                            </button>
+                                        </>
                                     )}
                                     <button 
                                         className="px-2 py-1 text-[11px] rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all" 
@@ -587,6 +605,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                     showYearLines={showYearLines}
                                     settings={settings}
                                     showGross={showGross}
+                                    showInvested={showInvested}
                                 />
                             )}
                         </div>
