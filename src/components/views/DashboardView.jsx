@@ -194,11 +194,10 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
                 axisLine={false} 
                 tickLine={false} 
                 domain={['auto', 'auto']} 
-                tickCount={8} 
                 tickFormatter={(v) => {
                     if (type !== 'value') return `${v.toFixed(0)}%`;
-                    if (Math.abs(v) >= 1000000) return `${(v / 1000000).toFixed(1).replace('.0', '')}m`;
-                    if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(0)}k`;
+                    if (Math.abs(v) >= 1000000) return `${Number((v / 1000000).toFixed(2))}m`;
+                    if (Math.abs(v) >= 1000) return `${Number((v / 1000).toFixed(1))}k`;
                     return v;
                 }} 
                 tick={{ fontSize: 10, fill: '#9ca3af' }} 
