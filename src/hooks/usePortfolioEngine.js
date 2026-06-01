@@ -111,8 +111,10 @@ export default function usePortfolioEngine(
         }
       }
 
-      if (!portfolio[key]) portfolio[key] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency };
+      if (!portfolio[key]) portfolio[key] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency, firstBuyDate: null, currentHoldingStartDate: null, txs: [] };
       const pos = portfolio[key];
+
+      pos.txs.push(tx);
 
       if (!isASK && !isAssetETF && !globalStockState[globalTickerKey]) {
         globalStockState[globalTickerKey] = { totalQty: 0, totalCostDKK: 0, avgPriceDKK: 0 };
@@ -149,6 +151,8 @@ export default function usePortfolioEngine(
         }
       }
       else if (tx.type === 'BUY') {
+        if (!pos.firstBuyDate || tx.date < pos.firstBuyDate) pos.firstBuyDate = tx.date;
+        if (Math.abs(pos.qty) < 0.001) pos.currentHoldingStartDate = tx.date;
         pos.qty += tx.qty;
         const totalCostDKK = valDKK + commissionDKK;
         // For ASK/ETF, track cost per position
