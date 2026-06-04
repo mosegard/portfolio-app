@@ -38,7 +38,11 @@ const HoldingsView = ({ portfolio, marketData, loading, lastUpdate }) => {
     const { activeList, closedList, allPositions } = useMemo(() => {
         const allEntries = Object.values(portfolio);
         const active = allEntries.filter(p => Math.abs(p.qty) > 0.01);
-        const closed = allEntries.filter(p => Math.abs(p.qty) <= 0.01 && p.txs && p.txs.length > 0);
+        const closed = allEntries.filter(p =>
+            Math.abs(p.qty) <= 0.01 &&
+            p.txs &&
+            p.txs.some(t => t.type === 'SELL')
+        );
 
         // Sort active by value descending
         active.sort((a, b) => {
@@ -145,6 +149,22 @@ const HoldingsView = ({ portfolio, marketData, loading, lastUpdate }) => {
         }
 
         return sparkData;
+    };
+
+    // --- Realized gain for closed positions ---
+    const calcRealizedGain = (p) => {
+        let totalCostDKK = 0;
+        let totalProceedsDKK = 0;
+        (p.txs || []).forEach(tx => {
+            const fxR = tx.fxRate || 1;
+            const comm = (tx.commission || 0) * fxR;
+            if (tx.type === 'BUY') {
+                totalCostDKK += tx.qty * tx.price * fxR + comm;
+            } else if (tx.type === 'SELL') {
+                totalProceedsDKK += Math.abs(tx.qty) * tx.price * fxR - comm;
+            }
+        });
+        return { gain: totalProceedsDKK - totalCostDKK, costBasis: totalCostDKK };
     };
 
     const handleNavigate = (newIndex) => {
@@ -312,19 +332,82 @@ const HoldingsView = ({ portfolio, marketData, loading, lastUpdate }) => {
                             {activeList.map((p, i) => renderRow(p, i, false))}
                         </tbody>
 
-                        {/* Closed holdings */}
-                        {closedList.length > 0 && (
-                            <tbody className="divide-y border-t-2 border-gray-200">
-                                <tr className="bg-gray-50">
-                                    <td colSpan={9} className="px-2 py-2 text-xs text-gray-500 uppercase font-semibold">
-                                        Tidligere beholdninger ({closedList.length})
-                                    </td>
-                                </tr>
-                                {closedList.map((p, i) => renderRow(p, activeList.length + i, true))}
-                            </tbody>
-                        )}
                     </table>
                 </div>
+
+                {/* ── Tidligere beholdninger ── */}
+                {closedList.length > 0 && (
+                    <div className="border-t border-gray-200">
+                        <div className="px-2 py-3 text-xs text-gray-500 uppercase font-semibold tracking-wide">
+                            Tidligere beholdninger ({closedList.length})
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-gray-50 text-xs uppercase text-gray-400">
+                                    <tr>
+                                        <th className="px-1 py-2 whitespace-nowrap">Ticker</th>
+                                        <th className="px-1 py-2 whitespace-nowrap hidden sm:table-cell">Konto</th>
+                                        <th className="px-1 py-2 whitespace-nowrap hidden md:table-cell">Periode</th>
+                                        <th className="px-1 py-2 text-center whitespace-nowrap hidden md:table-cell">Trend</th>
+                                        <th className="px-1 py-2 text-right whitespace-nowrap">Gevinst/Tab</th>
+                                        <th className="px-1 py-2 text-right whitespace-nowrap hidden sm:table-cell">%</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {closedList.map((p, i) => {
+                                        const { gain, costBasis } = calcRealizedGain(p);
+                                        const pct = costBasis > 0 ? (gain / costBasis) * 100 : null;
+                                        const sparkData = getSparkData(p);
+                                        const sparkPositive = sparkData.length >= 2
+                                            ? sparkData[sparkData.length - 1] >= sparkData[0]
+                                            : gain >= 0;
+                                        const globalIndex = activeList.length + i;
+                                        const lastSellTx = [...(p.txs || [])]
+                                            .filter(t => t.type === 'SELL')
+                                            .sort((a, b) => b.date - a.date)[0];
+                                        const fmtD = (d) => d
+                                            ? new Date(d).toLocaleDateString('da-DK', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                                            : '?';
+                                        return (
+                                            <tr key={p.ticker + p.acc} className="hover:bg-gray-50">
+                                                <td className="px-1 py-2 font-medium text-gray-600 whitespace-nowrap flex items-center gap-2">
+                                                    <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0"></span>
+                                                    <span
+                                                        className="cursor-pointer hover:text-blue-600"
+                                                        onClick={() => openChart(globalIndex)}
+                                                    >{p.ticker}</span>
+                                                </td>
+                                                <td className="px-1 py-2 text-gray-400 whitespace-nowrap hidden sm:table-cell text-xs">
+                                                    {p.acc}
+                                                </td>
+                                                <td className="px-1 py-2 text-gray-400 whitespace-nowrap hidden md:table-cell text-xs font-mono">
+                                                    {p.firstBuyDate
+                                                        ? `${fmtD(p.firstBuyDate)} – ${fmtD(lastSellTx?.date)}`
+                                                        : '–'}
+                                                </td>
+                                                <td className="px-1 py-1 text-center hidden md:table-cell align-middle">
+                                                    {sparkData.length >= 2 ? (
+                                                        <div className="flex justify-center">
+                                                            <Sparkline data={sparkData} positive={sparkPositive} onClick={() => openChart(globalIndex)} />
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-gray-300">–</span>
+                                                    )}
+                                                </td>
+                                                <td className={`px-1 py-2 text-right font-medium whitespace-nowrap ${gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                    {formatCurrency(gain)}
+                                                </td>
+                                                <td className={`px-1 py-2 text-right whitespace-nowrap hidden sm:table-cell ${gain >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                    {pct !== null ? `${formatNumber2(pct)}%` : '—'}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
             </div>
             {/* Last Update Indicator */}
             <div className="absolute right-6 bottom-2 md:right-8 md:bottom-4 flex items-center gap-2 text-xs font-mono bg-gray-50 px-2 py-1 rounded border border-gray-100 shadow">
