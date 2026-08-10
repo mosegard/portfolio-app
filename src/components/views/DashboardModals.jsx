@@ -177,3 +177,71 @@ export const MoversModal = ({ onClose, portfolio, marketData, getPositionValueWi
         </div>
     </ModalPortal>
 );
+
+export const TaxBreakdownModal = ({ onClose, currentVal, currentTax, breakdown }) => {
+    const netValue = currentVal - currentTax;
+    const items = [
+        { label: 'Urealiseret gevinst (aktier)', val: breakdown.unrealizedGainNormal, icon: 'ph-trend-up', color: 'text-blue-600', bg: 'bg-blue-50' },
+        { label: 'Estimeret aktieskat', val: breakdown.taxNormal, icon: 'ph-receipt', color: 'text-blue-600', bg: 'bg-blue-50', isTax: true },
+        { label: 'Urealiseret gevinst (ASK)', val: breakdown.unrealizedGainAsk, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50' },
+        { label: 'Estimeret ASK-skat (17%)', val: breakdown.taxAsk, icon: 'ph-piggy-bank', color: 'text-teal-600', bg: 'bg-teal-50', isTax: true },
+    ];
+
+    return (
+        <ModalPortal onBackdropClick={onClose}>
+            <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2"><i className="ph ph-bank text-emerald-600"></i> Værdi efter skat</h3>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><i className="ph ph-x text-lg"></i></button>
+                </div>
+                <div className="p-4 space-y-4">
+                    {/* Gross value */}
+                    <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-700 font-medium">Bruttoværdi (portefølje)</span>
+                        <span className="font-mono font-bold text-gray-900 text-lg">{formatCurrencyNoDecimals(currentVal)}</span>
+                    </div>
+
+                    {/* Tax breakdown */}
+                    <div className="border-t border-gray-100 pt-3 space-y-2">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">Estimeret skat ved salg</h4>
+                        {items.filter(it => it.isTax && it.val > 0).length === 0 ? (
+                            <div className="text-sm text-gray-400 italic py-2">Ingen estimeret skat (ingen urealiseret gevinst)</div>
+                        ) : (
+                            items.map((item, i) => {
+                                if (item.val <= 0) return null;
+                                return (
+                                    <div key={i} className="flex justify-between items-center text-sm">
+                                        <div className="flex items-center gap-2">
+                                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${item.bg} ${item.color}`}><i className={`ph ${item.icon} text-sm`}></i></div>
+                                            <span className="text-gray-600">{item.label}</span>
+                                        </div>
+                                        <span className={`font-mono font-medium ${item.isTax ? 'text-red-600' : 'text-gray-700'}`}>
+                                            {item.isTax ? '-' : ''}{formatCurrencyNoDecimals(item.val)}
+                                        </span>
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
+
+                    {/* Total tax */}
+                    {currentTax > 0 && (
+                        <div className="border-t border-gray-200 pt-3 flex justify-between items-center">
+                            <span className="font-medium text-gray-700">Samlet estimeret skat</span>
+                            <span className="font-mono font-bold text-red-600">-{formatCurrencyNoDecimals(currentTax)}</span>
+                        </div>
+                    )}
+
+                    {/* Net value */}
+                    <div className="border-t border-gray-200 pt-3 bg-emerald-50 -mx-4 px-4 pb-4 -mb-4 rounded-b-xl">
+                        <div className="flex justify-between items-center pt-3">
+                            <span className="font-bold text-emerald-800">Værdi efter skat</span>
+                            <span className="font-mono font-bold text-emerald-700 text-xl">{formatCurrencyNoDecimals(netValue)}</span>
+                        </div>
+                        <div className="text-[10px] text-emerald-600 mt-1">Estimat baseret på urealiserede gevinster og gældende skattesatser</div>
+                    </div>
+                </div>
+            </div>
+        </ModalPortal>
+    );
+};

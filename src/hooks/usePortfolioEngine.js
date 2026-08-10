@@ -39,6 +39,7 @@ export default function usePortfolioEngine(
         portfolio: {}, reports: {}, totalValueGraph: [], growthGraphData: [],
         currentVal: 0, currentTax: 0, costBasisTotal: 0,
         liquidation: { netResult: 0, allTimeGain: 0, lifetimeNetInvested: 0, totalHistoricTaxCost: 0, totalTaxBurden: 0, effectiveTaxRate: 0, taxBreakdown: [] },
+        currentTaxBreakdown: { unrealizedGainAsk: 0, unrealizedGainNormal: 0, taxAsk: 0, taxNormal: 0 },
         liquidationNormalTax: 0, unrealizedStockGain: 0, yearlyStats: [], warnings: [], holdingGraphsByTicker: {}
       };
     }
@@ -128,8 +129,10 @@ export default function usePortfolioEngine(
         }
       }
 
-      if (!portfolio[key]) portfolio[key] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency };
+      if (!portfolio[key]) portfolio[key] = { ticker: tx.ticker, qty: 0, cost: 0, avg: 0, acc: tx.account, cur: tx.currency, firstBuyDate: null, currentHoldingStartDate: null, txs: [] };
       const pos = portfolio[key];
+
+      pos.txs.push(tx);
 
       if (!isASK && !isAssetETF && !globalStockState[globalTickerKey]) {
         globalStockState[globalTickerKey] = { totalQty: 0, totalCostDKK: 0, avgPriceDKK: 0 };
@@ -166,6 +169,8 @@ export default function usePortfolioEngine(
         }
       }
       else if (tx.type === 'BUY') {
+        if (!pos.firstBuyDate || tx.date < pos.firstBuyDate) pos.firstBuyDate = tx.date;
+        if (Math.abs(pos.qty) < 0.001) pos.currentHoldingStartDate = tx.date;
         pos.qty += tx.qty;
         const totalCostDKK = valDKK + commissionDKK;
         // For ASK/ETF, track cost per position
@@ -314,6 +319,11 @@ export default function usePortfolioEngine(
     });
 
     // --- 7. GRAPH GENERATION ---
+    let lastUnrealizedGainAsk = 0;
+    let lastUnrealizedGainNormal = 0;
+    let lastTaxAsk = 0;
+    let lastTaxNormal = 0;
+
     if (txs.length > 0) {
       const timeTxs = [...txs].sort((a, b) => a.date - b.date);
       let d = new Date(timeTxs[0].date);
@@ -439,14 +449,22 @@ export default function usePortfolioEngine(
         }
 
         let estimatedTaxLiability = 0;
+        let dayTaxAsk = 0;
+        let dayTaxNormal = 0;
         const taxableGainAsk = Math.max(0, dayUnrealizedGainAsk - carryForwardAsk);
-        if (taxableGainAsk > 0) estimatedTaxLiability += (taxableGainAsk * 0.17);
+        if (taxableGainAsk > 0) { dayTaxAsk = taxableGainAsk * 0.17; estimatedTaxLiability += dayTaxAsk; }
         
         if (dayUnrealizedGainNormal > 0) {
             const yearStr = d.getFullYear().toString();
             const yearLimit = getTaxLimit(yearStr) * (settings?.married ? 2 : 1);
-            estimatedTaxLiability += calculateDanishTax(dayUnrealizedGainNormal, yearLimit);
+            dayTaxNormal = calculateDanishTax(dayUnrealizedGainNormal, yearLimit);
+            estimatedTaxLiability += dayTaxNormal;
         }
+
+        lastUnrealizedGainAsk = dayUnrealizedGainAsk;
+        lastUnrealizedGainNormal = dayUnrealizedGainNormal;
+        lastTaxAsk = dayTaxAsk;
+        lastTaxNormal = dayTaxNormal;
 
         const dayNetValue = dayAssetValue - estimatedTaxLiability;
 
@@ -609,6 +627,7 @@ export default function usePortfolioEngine(
     return {
       portfolio, reports, totalValueGraph, growthGraphData,
       currentVal, currentTax, costBasisTotal, liquidation,
+      currentTaxBreakdown: { unrealizedGainAsk: lastUnrealizedGainAsk, unrealizedGainNormal: lastUnrealizedGainNormal, taxAsk: lastTaxAsk, taxNormal: lastTaxNormal },
       liquidationNormalTax: 0, unrealizedStockGain: unrealizedRubrik66Gain, yearlyStats, warnings: executionWarnings,
       holdingGraphsByTicker
     };

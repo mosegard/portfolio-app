@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import ModalPortal from '../ModalPortal';
 import { formatCurrency, formatCurrencyNoDecimals } from '../../utils';
 import useDashboardChartData from '../../hooks/useDashboardChartData';
-import { AllocationModal, LiquidationModal, GainModal, MoversModal } from './DashboardModals';
+import { AllocationModal, LiquidationModal, GainModal, MoversModal, TaxBreakdownModal } from './DashboardModals';
 
 // --- Pill-bar Range Selector ---
 const RangeSelector = ({ value, onChange, years }) => {
@@ -323,7 +323,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
     const [showInvested, setShowInvested] = useState(false);
     
     // Modal Visibility State
-    const [modals, setModals] = useState({ movers: false, liquidation: false, allocation: false, gain: false });
+    const [modals, setModals] = useState({ movers: false, liquidation: false, allocation: false, gain: false, taxBreakdown: false });
     const toggleModal = (key, val) => setModals(prev => ({ ...prev, [key]: val }));
 
     // Use Custom Hook for Data Logic
@@ -451,6 +451,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
             {/* --- MODALS --- */}
             {modals.allocation && <AllocationModal onClose={() => toggleModal('allocation', false)} portfolio={calc.portfolio} marketData={marketData} getFxRate={getFxRate} />}
             {modals.liquidation && <LiquidationModal onClose={() => toggleModal('liquidation', false)} liq={calc.liquidation} />}
+            {modals.taxBreakdown && <TaxBreakdownModal onClose={() => toggleModal('taxBreakdown', false)} currentVal={calc.currentVal} currentTax={calc.currentTax} breakdown={calc.currentTaxBreakdown} />}
             {modals.gain && <GainModal onClose={() => toggleModal('gain', false)} breakdown={breakdownData} total={allTimeGain} />}
             {modals.movers && <MoversModal onClose={() => toggleModal('movers', false)} portfolio={calc.portfolio} marketData={marketData} getPositionValueWithPrev={getPositionValueWithPrev} />}
 
@@ -512,7 +513,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
 
             {/* --- CARDS --- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
-                <div onClick={() => toggleModal('liquidation', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+                <div onClick={() => toggleModal('taxBreakdown', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi</div>
                     <div className="mt-2 text-3xl font-bold text-gray-900 tracking-tight">
                         <AnimatedValue value={calc.currentVal - calc.currentTax} formatter={formatCurrencyNoDecimals} />
