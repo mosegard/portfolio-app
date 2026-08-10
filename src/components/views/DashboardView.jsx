@@ -305,7 +305,7 @@ const YearOverYearChart = ({ yoyData, selectedYears, years }) => {
 };
 
 // --- Main Component ---
-const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketData, uniqueTickers, years }) => {
+const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers, years }) => {
     const [graphRange, setGraphRange] = useState('1Y');
     const [customRange, setCustomRange] = useState({ startIso: '', endIso: '' });
     const [chartSelection, setChartSelection] = useState({ start: null, end: null, chart: null, dragging: false });
@@ -472,7 +472,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                             <div className="flex items-center gap-2">
                                 <TickerSelector tickers={uniqueTickers} selected={selectedTickers} onChange={setSelectedTickers} COLORS={COLORS} />
                                 {fullscreenChart === 'growth' && (
-                                    <select className="px-2 py-1 text-[11px] font-bold rounded-md bg-gray-50 border border-gray-200 cursor-pointer focus:outline-none" value={settings.benchmarkTicker} onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); fetchMarketData(true); }}>
+                                    <select className="px-2 py-1 text-[11px] font-bold rounded-md bg-gray-50 border border-gray-200 cursor-pointer focus:outline-none" value={settings.benchmarkTicker} onChange={e => setSettings(s => ({ ...s, benchmarkTicker: e.target.value }))}>
                                         {BENCHMARKS.map(b => (<option key={b.ticker} value={b.ticker}>{b.label}</option>))}
                                     </select>
                                 )}
@@ -643,7 +643,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
                                                 settings.benchmarkTicker ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-gray-200 text-gray-500'
                                             }`}
                                             value={settings.benchmarkTicker}
-                                            onChange={e => { setSettings(s => ({ ...s, benchmarkTicker: e.target.value })); if (e.target.value) fetchMarketData(true); }}
+                                            onChange={e => setSettings(s => ({ ...s, benchmarkTicker: e.target.value }))}
                                         >
                                             {BENCHMARKS.map(b => <option key={b.ticker} value={b.ticker}>{b.ticker ? `vs ${b.label}` : b.label}</option>)}
                                         </select>

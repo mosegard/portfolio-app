@@ -166,6 +166,19 @@ function App() {
         return () => clearInterval(interval);
     }, [uniqueTickersKey, uniqueTickersCount, settings.benchmarkTicker, fetchMarketData, lastUpdate]);
 
+    // Force-fetch as soon as the user picks a benchmark, instead of waiting for the
+    // next periodic refresh (which the effect above skips whenever overall data is
+    // still fresh). Uses a ref so it always calls the latest fetchMarketData without
+    // making this effect depend on it (fetchMarketData's identity changes on every
+    // fetch, which would otherwise cause this to loop).
+    const fetchMarketDataRef = useRef(fetchMarketData);
+    useEffect(() => { fetchMarketDataRef.current = fetchMarketData; }, [fetchMarketData]);
+    useEffect(() => {
+        if (settings.benchmarkTicker) fetchMarketDataRef.current(true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [settings.benchmarkTicker]);
+
+
     const loadFromGithub = async () => {
         if (!ghConfig.token) return;
         setStatusMsg('Loading...');
@@ -509,7 +522,7 @@ function App() {
 
                 <div className="flex-1 overflow-auto overflow-x-auto bg-gray-50">
                     {view === 'editor' && <EditorView rows={rows} setRows={setRows} filterAccount={filterAccount} config={config} accounts={accounts} tickers={uniqueTickers} saveToGithub={saveToGithub} statusMsg={statusMsg} handleFileUpload={handleFileUpload} detectedCurrencies={detectedCurrencies} />}
-                    {view === 'dashboard' && <DashboardView calc={calc} marketData={marketData} settings={settings} setSettings={setSettings} fetchMarketData={fetchMarketData} uniqueTickers={uniqueTickers} years={years} />}
+                    {view === 'dashboard' && <DashboardView calc={calc} marketData={marketData} settings={settings} setSettings={setSettings} uniqueTickers={uniqueTickers} years={years} />}
                     {view === 'holdings' && <HoldingsView portfolio={calc.portfolio} marketData={marketData} loading={loading} lastUpdate={lastUpdate} />}
                     {view === 'split' && <SplitToolView rows={rows} setRows={setRows} marketData={marketData} tickers={uniqueTickers} txs={txs} />}
                     {view === 'tax' && <TaxReportView taxYear={taxYear} settings={settings} calc={calc} />}
