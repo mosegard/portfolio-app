@@ -1,6 +1,23 @@
 import { useMemo } from 'react';
 import { TAX_LIMITS, calculateDanishTax, getLocalISO } from '../utils';
 
+// A long-only, unlevered position/portfolio can never lose more than 100% of its
+// value in a single day (dailyReturn can't be < -1). If the raw modified-Dietz
+// calculation produces something outside that range, it means the day's inputs are
+// inconsistent (e.g. a missing stock-split adjustment, a ticker typo that split a
+// holding's cost basis across two keys, or a bad price from the data source) rather
+// than a real market move. Clamping (and warning) prevents one bad data point from
+// permanently corrupting the cumulative TWR multiplier into a nonsensical negative
+// value, which previously showed up as a permanent "cliff" in the return graphs.
+const safeDailyReturn = (dailyProfit, adjustedStart, label) => {
+  const raw = dailyProfit / adjustedStart;
+  if (!Number.isFinite(raw) || raw < -1 || raw > 20) {
+    console.warn(`[PortfolioEngine] Ignoring implausible daily return (${(raw * 100).toFixed(1)}%) for ${label}. Check for missing stock splits or ticker typos.`);
+    return 0;
+  }
+  return raw;
+};
+
 export default function usePortfolioEngine(
   txs,
   marketData,
@@ -437,7 +454,7 @@ export default function usePortfolioEngine(
         const dailyProfit = dayAssetValue - prevDayValue - dayInvestedFlow;
 
         if (adjustedStart > 1) {
-          const dailyReturn = dailyProfit / adjustedStart;
+          const dailyReturn = safeDailyReturn(dailyProfit, adjustedStart, `portfolio on ${dStr}`);
           twrMultiplier = twrMultiplier * (1 + dailyReturn);
         }
         prevDayValue = dayAssetValue;
@@ -456,7 +473,7 @@ export default function usePortfolioEngine(
             const adjustedStartH = h.prev + (flow * 0.5);
             const dailyProfitH = curVal - h.prev - flow;
             if (adjustedStartH > 1) {
-                const dailyReturnH = dailyProfitH / adjustedStartH;
+                const dailyReturnH = safeDailyReturn(dailyProfitH, adjustedStartH, `${tkr} on ${dStr}`);
                 h.twr = h.twr * (1 + dailyReturnH);
             }
             h.prev = curVal;

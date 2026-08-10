@@ -155,8 +155,12 @@ function App() {
         };
 
         checkAndFetch();
+        // NOTE: force=false here - the interval only needs to re-check staleness.
+        // Using force=true previously re-fetched every single ticker (including
+        // permanently invalid ones) every 60s regardless of freshness, hammering
+        // the Yahoo proxy continuously.
         const interval = setInterval(() => {
-            fetchMarketData(true);
+            fetchMarketData(false);
         }, 60000);
 
         return () => clearInterval(interval);

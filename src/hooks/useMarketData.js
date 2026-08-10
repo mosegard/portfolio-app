@@ -206,6 +206,20 @@ export default function useMarketData(txs, settings, uniqueTickers) {
                 }
             } catch (e) {
                 console.warn(`[MarketData] Failed to fetch ${ticker}`, e);
+                // Stamp a lastUpdated even on failure (keeping any prior data) so a
+                // permanently invalid/delisted ticker backs off according to the normal
+                // staleness rules instead of being retried on every single fetch cycle.
+                const existing = marketData[ticker];
+                const nowTs = Date.now();
+                newCompressedData[ticker] = {
+                    h: existing?.history ? compressMarketData(existing.history) : [],
+                    c: existing?.currency,
+                    p: existing?.price,
+                    pc: existing?.previousClose,
+                    lt: existing?.lastTradeTime,
+                    u: nowTs
+                };
+                newInflatedData[ticker] = { ...(existing || { history: [] }), lastUpdated: nowTs };
             }
         }));
 

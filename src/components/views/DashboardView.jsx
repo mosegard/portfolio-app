@@ -348,6 +348,9 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
         ask: acc.ask + (r.askGain || 0),
     }), { stocks: 0, etfs: 0, divs: 0, capital: 0, ask: 0 });
     const allTimeGain = bd.stocks + bd.etfs + bd.divs + bd.capital + bd.ask + (calc.unrealizedStockGain || 0);
+    const allTimeGainAfterTax = allTimeGain - (calc.liquidation?.totalTaxBurden || 0);
+    // No day-level tax event actually occurs - this is an estimate using the overall effective tax rate.
+    const todayGainAfterTax = todayStats.todayGain * (1 - (calc.liquidation?.effectiveTaxRate || 0) / 100);
 
     const breakdownData = [
         { label: 'Realiseret Aktiegevinst', val: bd.stocks, icon: 'ph-trend-up', color: 'text-blue-600', bg: 'bg-blue-50' },
@@ -510,28 +513,39 @@ const DashboardView = ({ calc, marketData, settings, setSettings, fetchMarketDat
             {/* --- CARDS --- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
                 <div onClick={() => toggleModal('liquidation', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
-                    <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi efter skat</div>
+                    <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi</div>
                     <div className="mt-2 text-3xl font-bold text-gray-900 tracking-tight">
                         <AnimatedValue value={calc.currentVal - calc.currentTax} formatter={formatCurrencyNoDecimals} />
+                    </div>
+                    <div className="mt-1 text-xs text-gray-400 font-medium">
+                        Før skat: <span className="text-gray-600 font-semibold">{formatCurrencyNoDecimals(calc.currentVal)}</span>
                     </div>
                 </div>
                 <div onClick={() => toggleModal('gain', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-trend-up"></i>Samlet gevinst</div>
-                    <div className={`mt-2 text-3xl font-bold tracking-tight ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        <AnimatedValue value={allTimeGain} formatter={formatCurrencyNoDecimals} />
+                    <div className={`mt-2 text-3xl font-bold tracking-tight ${allTimeGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        <AnimatedValue value={allTimeGainAfterTax} formatter={formatCurrencyNoDecimals} />
+                    </div>
+                    <div className="mt-1 text-xs text-gray-400 font-medium">
+                        Før skat: <span className={`font-semibold ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(allTimeGain)}</span>
                     </div>
                 </div>
                 <div onClick={() => toggleModal('movers', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-arrow-up-right"></i>Gevinst/Tab i dag</div>
-                    <div className={`mt-2 text-3xl font-bold tracking-tight ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayStats.todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
+                    <div className={`mt-2 text-3xl font-bold tracking-tight ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
                         {todayStats.activeCount > 0 ? (
                             <AnimatedValue 
-                                value={todayStats.todayGain} 
+                                value={todayGainAfterTax} 
                                 formatter={formatCurrencyNoDecimals} 
                                 suffix={<span className="text-lg font-bold ml-2 align-middle"><AnimatedValue value={todayStats.todayPct} formatter={v => `${v.toFixed(2)}%`} showTrend={false} className="inline-flex" /></span>}
                             />
                         ) : "0 kr."}
                     </div>
+                    {todayStats.activeCount > 0 && (
+                        <div className="mt-1 text-xs text-gray-400 font-medium">
+                            Før skat: <span className={`font-semibold ${todayStats.todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(todayStats.todayGain)}</span>
+                        </div>
+                    )}
                 </div>
             </div>
 
