@@ -34,7 +34,7 @@ const RangeSelector = ({ value, onChange, years }) => {
                 </button>
             ))}
             {years.length > 0 && (
-                <div className="relative">
+                <div className="relative hidden sm:block">
                     <select
                         className={`appearance-none pl-2 pr-5 py-1 text-[11px] font-bold rounded-md border-0 cursor-pointer focus:outline-none ${isYear ? 'bg-gray-800 text-white' : 'bg-transparent text-gray-500 hover:text-gray-800'}`}
                         value={isYear ? value : ''}
@@ -145,7 +145,21 @@ const AnimatedValue = ({ value, formatter, className = "", showTrend = true, suf
 };
 
 // --- Updated Shared Chart Component ---
+// Recharts has no built-in touch support - its tooltip only reacts to real mouse
+// events. Re-dispatching each touch move as a synthetic mousemove lets the same
+// hover/tooltip behavior work with a finger, and touch-action:none stops the page
+// from scrolling underneath while the user scrubs across the chart.
+const dispatchSyntheticMouseMove = (touch) => {
+    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+    target?.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: touch.clientX, clientY: touch.clientY }));
+};
+
 const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, selectedTickers, COLORS, graphRange, numericYearTicks, showYearLines, settings, showGross, showInvested }) => (
+    <div
+        className="w-full h-full touch-none"
+        onTouchStart={e => e.touches[0] && dispatchSyntheticMouseMove(e.touches[0])}
+        onTouchMove={e => e.touches[0] && dispatchSyntheticMouseMove(e.touches[0])}
+    >
     <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data}
             onMouseDown={e => onChartMouse(e, type, 'down')}
@@ -243,6 +257,7 @@ const CommonChart = ({ type, data, chartSelection, onChartMouse, isMulti, select
             )}
         </AreaChart>
     </ResponsiveContainer>
+    </div>
 );
 
 // --- Year-over-Year Chart ---
@@ -384,11 +399,23 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
         return () => { window.removeEventListener('mouseup', onUp); document.body.style.userSelect = ''; };
     }, [chartSelection.dragging]);
 
+    // Desktop-only drag-to-zoom (click+drag to select a range). On touch devices this
+    // is replaced by a simple tap/scrub to read values via Recharts' own tooltip -
+    // dragging a selection box isn't discoverable/intuitive with a finger, so we skip
+    // it entirely for touch input (and just stop the page from scrolling underneath
+    // the chart while the user is scrubbing across it).
     const handleChartMouse = (e, chartType, eventType) => {
         if (fullscreenChart && chartType !== fullscreenChart) return;
-        
+
+        const se = e && e.sourceEvent;
+        const isTouch = !!se && (se.type?.startsWith('touch') || se.touches !== undefined);
+        if (isTouch) {
+            if ((eventType === 'down' || eventType === 'move') && se.cancelable) se.preventDefault();
+            return;
+        }
+
         if (eventType === 'down' && e && e.activeLabel) {
-            const se = e && e.sourceEvent; if (se && se.preventDefault) se.preventDefault();
+            if (se && se.preventDefault) se.preventDefault();
             setChartSelection({ start: e.activeLabel, end: null, chart: chartType, dragging: true });
         } else if (eventType === 'move' && chartSelection.dragging && chartSelection.chart === chartType && e && e.activeLabel) {
             setChartSelection(s => ({ ...s, end: e.activeLabel }));
@@ -446,7 +473,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
     };
 
     return (
-        <div className="p-6 md:p-8 space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
+        <div className="p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
             
             {/* --- MODALS --- */}
             {modals.allocation && <AllocationModal onClose={() => toggleModal('allocation', false)} portfolio={calc.portfolio} marketData={marketData} getFxRate={getFxRate} />}
@@ -512,28 +539,28 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
             )}
 
             {/* --- CARDS --- */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
-                <div onClick={() => toggleModal('taxBreakdown', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-6">
+                <div onClick={() => toggleModal('taxBreakdown', true)} className="bg-white rounded-xl p-4 sm:p-5 border border-gray-200 shadow-sm grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 sm:flex sm:flex-col sm:items-stretch sm:justify-between sm:gap-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi</div>
-                    <div className="mt-2 text-3xl font-bold text-gray-900 tracking-tight">
+                    <div className="text-lg sm:mt-2 sm:text-3xl font-bold text-gray-900 tracking-tight text-right sm:text-left">
                         <AnimatedValue value={calc.currentVal - calc.currentTax} formatter={formatCurrencyNoDecimals} />
                     </div>
-                    <div className="mt-1 text-xs text-gray-400 font-medium">
+                    <div className="col-span-2 sm:col-span-1 text-[11px] sm:text-xs text-gray-400 font-medium sm:mt-1">
                         Før skat: <span className="text-gray-600 font-semibold">{formatCurrencyNoDecimals(calc.currentVal)}</span>
                     </div>
                 </div>
-                <div onClick={() => toggleModal('gain', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+                <div onClick={() => toggleModal('gain', true)} className="bg-white rounded-xl p-4 sm:p-5 border border-gray-200 shadow-sm grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 sm:flex sm:flex-col sm:items-stretch sm:justify-between sm:gap-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-trend-up"></i>Samlet gevinst</div>
-                    <div className={`mt-2 text-3xl font-bold tracking-tight ${allTimeGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    <div className={`text-lg sm:mt-2 sm:text-3xl font-bold tracking-tight text-right sm:text-left ${allTimeGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         <AnimatedValue value={allTimeGainAfterTax} formatter={formatCurrencyNoDecimals} />
                     </div>
-                    <div className="mt-1 text-xs text-gray-400 font-medium">
+                    <div className="col-span-2 sm:col-span-1 text-[11px] sm:text-xs text-gray-400 font-medium sm:mt-1">
                         Før skat: <span className={`font-semibold ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(allTimeGain)}</span>
                     </div>
                 </div>
-                <div onClick={() => toggleModal('movers', true)} className="bg-white rounded-lg p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+                <div onClick={() => toggleModal('movers', true)} className="bg-white rounded-xl p-4 sm:p-5 border border-gray-200 shadow-sm grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 sm:flex sm:flex-col sm:items-stretch sm:justify-between sm:gap-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-arrow-up-right"></i>Gevinst/Tab i dag</div>
-                    <div className={`mt-2 text-3xl font-bold tracking-tight ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
+                    <div className={`text-lg sm:mt-2 sm:text-3xl font-bold tracking-tight text-right sm:text-left ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
                         {todayStats.activeCount > 0 ? (
                             <AnimatedValue 
                                 value={todayGainAfterTax} 
@@ -543,7 +570,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                         ) : "0 kr."}
                     </div>
                     {todayStats.activeCount > 0 && (
-                        <div className="mt-1 text-xs text-gray-400 font-medium">
+                        <div className="col-span-2 sm:col-span-1 text-[11px] sm:text-xs text-gray-400 font-medium sm:mt-1">
                             Før skat: <span className={`font-semibold ${todayStats.todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(todayStats.todayGain)}</span>
                         </div>
                     )}
@@ -558,7 +585,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                     <div className="bg-white p-4 rounded-xl shadow-sm">
                         {/* Chart Mode Tabs + Controls */}
                         <div className="flex flex-col gap-3 mb-4">
-                            <div className="flex items-center justify-between">
+                            <div className="hidden sm:flex items-center justify-between">
                                 {/* Mode tabs */}
                                 <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
                                     {[
@@ -637,7 +664,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
 
                                 {/* Benchmark selector (only for growth mode) */}
                                 {chartMode === 'growth' && !isMulti && (
-                                    <div className="relative shrink-0 ml-auto">
+                                    <div className="relative shrink-0 ml-auto hidden sm:block">
                                         <select
                                             className={`appearance-none pl-2 pr-6 py-0.5 text-[10px] font-bold rounded-md border cursor-pointer focus:outline-none ${
                                                 settings.benchmarkTicker ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-white border-gray-200 text-gray-500'
@@ -656,7 +683,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                         </div>
 
                         {/* Chart area */}
-                        <div className="h-72 w-full">
+                        <div className="h-64 sm:h-72 w-full">
                             {chartMode === 'yoy' ? (
                                 <YearOverYearChart yoyData={yoyData} selectedYears={yoySelectedYears} years={years} />
                             ) : (
@@ -690,7 +717,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                             const diff = portfolio - bench;
                             if (!isFinite(diff)) return null;
                             return (
-                                <div className="mt-2 flex items-center gap-3 text-xs text-gray-500">
+                                <div className="hidden sm:flex mt-2 items-center gap-3 text-xs text-gray-500">
                                     <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded bg-emerald-500"></span>Portefølje: <span className="font-mono font-medium text-gray-700">{portfolio.toFixed(2)}%</span></span>
                                     <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 rounded bg-amber-500 opacity-70" style={{borderTop: '1px dashed'}}></span>{benchLabel}: <span className="font-mono font-medium text-gray-700">{bench.toFixed(2)}%</span></span>
                                     <span className={`font-mono font-bold ${diff >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{diff >= 0 ? '+' : ''}{diff.toFixed(2)}%</span>
@@ -700,7 +727,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
 
                         {/* Active ticker chips */}
                         {selectedTickers.length > 0 && chartMode !== 'yoy' && (
-                            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                            <div className="hidden sm:flex mt-2 items-center gap-1.5 flex-wrap">
                                 {selectedTickers.map((t, i) => (
                                     <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-100 text-gray-600">
                                         <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }}></span>
@@ -741,8 +768,8 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                     </div>
                 </div>
             </div>
-            {/* Mobile Stats Table */}
-            <div className="block lg:hidden mt-8">
+            {/* Compact stats table (tablet widths only; hidden on phones and covered by the sidebar on desktop) */}
+            <div className="hidden sm:block lg:hidden mt-8">
                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
                     <div className="p-4 border-b border-gray-100 bg-gray-50"><h3 className="font-bold text-gray-800 text-sm uppercase tracking-wide">Afkast pr. år</h3></div>
                     <div className="divide-y divide-gray-100">
