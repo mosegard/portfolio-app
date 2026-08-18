@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceArea, LineChart, Line } from 'recharts';
 import ModalPortal from '../ModalPortal';
 import { formatCurrency, formatCurrencyNoDecimals } from '../../utils';
@@ -341,6 +341,56 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
     const [modals, setModals] = useState({ movers: false, liquidation: false, allocation: false, gain: false, taxBreakdown: false });
     const toggleModal = (key, val) => setModals(prev => ({ ...prev, [key]: val }));
 
+    // On phones, size the chart to exactly fill the space down to the bottom of the
+    // screen (app-like feel) instead of leaving a gap. Measured in JS (not CSS %
+    // height) since the chart sits inside a scrollable flex chain where percentage
+    // heights don't reliably resolve. Only recomputed on resize/orientation/content
+    // reflow - never on data ticks - so live price updates can't shift the chart.
+    const rootRef = useRef(null);
+    const chartAreaRef = useRef(null);
+    const [mobileChartHeight, setMobileChartHeight] = useState(null);
+    useLayoutEffect(() => {
+        const MIN_HEIGHT = 220;
+        // Self-correcting: measure how far the page's actual bottom edge is from the
+        // viewport bottom (using whatever chart height is CURRENTLY applied) and
+        // adjust by exactly that overshoot/gap, rather than guessing a fixed margin
+        // constant (unreliable - actual trailing space depends on padding/space-y
+        // internals we don't want to hardcode).
+        const recalc = () => {
+            if (window.innerWidth >= 640 || !chartAreaRef.current || !rootRef.current) {
+                setMobileChartHeight(null);
+                return;
+            }
+            const currentHeight = chartAreaRef.current.getBoundingClientRect().height;
+            const overshoot = rootRef.current.getBoundingClientRect().bottom - window.innerHeight;
+            const target = Math.round(currentHeight - overshoot);
+            setMobileChartHeight(prev => {
+                const next = Math.max(MIN_HEIGHT, target);
+                // Avoid a redundant state update (and therefore an extra ResizeObserver
+                // round-trip) once we've converged within a pixel of rounding noise.
+                return prev != null && Math.abs(prev - next) <= 1 ? prev : next;
+            });
+        };
+        recalc();
+        // A couple of follow-up passes catch late reflow (icon font swap-in, first
+        // real data replacing placeholder values) without ever running on a timer.
+        const raf = requestAnimationFrame(recalc);
+        const timer = setTimeout(recalc, 400);
+        // Observe the whole page's content (not just the chart card) so a height
+        // change ANYWHERE above the chart (e.g. the hero numbers) re-triggers this.
+        const ro = new ResizeObserver(recalc);
+        if (rootRef.current) ro.observe(rootRef.current);
+        window.addEventListener('resize', recalc);
+        window.addEventListener('orientationchange', recalc);
+        return () => {
+            cancelAnimationFrame(raf);
+            clearTimeout(timer);
+            ro.disconnect();
+            window.removeEventListener('resize', recalc);
+            window.removeEventListener('orientationchange', recalc);
+        };
+    }, []);
+
     // Use Custom Hook for Data Logic
     const { 
         todayStats, numericValueData, numericGrowthData, yoyData, getFxRate, getPositionValueWithPrev 
@@ -366,6 +416,17 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
     const allTimeGainAfterTax = allTimeGain - (calc.liquidation?.totalTaxBurden || 0);
     // No day-level tax event actually occurs - this is an estimate using the overall effective tax rate.
     const todayGainAfterTax = todayStats.todayGain * (1 - (calc.liquidation?.effectiveTaxRate || 0) / 100);
+
+    // Stable "today" badge text/colors (mobile hero) - always rendered, same shape,
+    // regardless of sign/data availability, so it never shifts other content around.
+    const todayHasData = todayStats.activeCount > 0;
+    const todayIsPositive = todayGainAfterTax > 0;
+    const todayIsNegative = todayGainAfterTax < 0;
+    const todayBadgeClasses = !todayHasData
+        ? 'bg-gray-100 text-gray-400'
+        : todayIsPositive ? 'bg-emerald-50 text-emerald-700' : todayIsNegative ? 'bg-rose-50 text-rose-700' : 'bg-gray-100 text-gray-500';
+    const todayBadgeIcon = !todayHasData ? 'ph-minus' : todayIsPositive ? 'ph-arrow-up-right' : todayIsNegative ? 'ph-arrow-down-right' : 'ph-minus';
+    const todaySign = todayIsPositive ? '+' : '';
 
     const breakdownData = [
         { label: 'Realiseret Aktiegevinst', val: bd.stocks, icon: 'ph-trend-up', color: 'text-blue-600', bg: 'bg-blue-50' },
@@ -473,7 +534,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
     };
 
     return (
-        <div className="p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
+        <div ref={rootRef} className="p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto">
             
             {/* --- MODALS --- */}
             {modals.allocation && <AllocationModal onClose={() => toggleModal('allocation', false)} portfolio={calc.portfolio} marketData={marketData} getFxRate={getFxRate} />}
@@ -538,29 +599,70 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                 </ModalPortal>
             )}
 
-            {/* --- CARDS --- */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-6">
-                <div onClick={() => toggleModal('taxBreakdown', true)} className="bg-white rounded-xl p-4 sm:p-5 border border-gray-200 shadow-sm grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 sm:flex sm:flex-col sm:items-stretch sm:justify-between sm:gap-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+            {/* --- MOBILE HERO (phones only) --- */}
+            {/* Everything here shares ONE alignment (centered) and ONE label/value/subtitle
+                typographic pattern - only size/weight signal primary vs secondary, so the
+                hierarchy reads as intentional instead of a scattered mix of alignments. */}
+            <div className="sm:hidden text-center">
+                <div onClick={() => toggleModal('taxBreakdown', true)} className="cursor-pointer active:opacity-70 transition-opacity" aria-label="Værdi">
+                    <div className="text-[2.5rem] leading-none font-extrabold text-gray-900 tracking-tight tabular-nums">
+                        <AnimatedValue value={calc.currentVal - calc.currentTax} formatter={formatCurrencyNoDecimals} showTrend={false} className="justify-center" />
+                    </div>
+                    <div className="mt-2 text-xs text-gray-400 font-medium tabular-nums">
+                        Før skat {formatCurrencyNoDecimals(calc.currentVal)}
+                    </div>
+                </div>
+
+                {/* Today's change - fixed shape/position regardless of sign or data availability */}
+                <div className="mt-3 flex justify-center">
+                    <button onClick={() => toggleModal('movers', true)} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-bold tabular-nums ${todayBadgeClasses}`}>
+                        <i className={`ph ${todayBadgeIcon}`}></i>
+                        {todayHasData ? (
+                            <span>{todaySign}{formatCurrencyNoDecimals(todayGainAfterTax)} · {todaySign}{todayStats.todayPct.toFixed(2)}% i dag</span>
+                        ) : (
+                            <span>Ingen bevægelse i dag</span>
+                        )}
+                    </button>
+                </div>
+
+                <div className="mt-5 pt-4 border-t border-gray-100">
+                    <button onClick={() => toggleModal('gain', true)} className="w-full rounded-xl active:bg-gray-50 transition-colors py-1">
+                        <div className="text-[11px] font-bold uppercase tracking-widest text-gray-400 flex items-center justify-center gap-1">
+                            <i className="ph ph-trend-up"></i>Samlet gevinst
+                        </div>
+                        <div className={`mt-1 text-2xl leading-none font-extrabold tracking-tight tabular-nums ${allTimeGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {allTimeGainAfterTax > 0 ? '+' : ''}{formatCurrencyNoDecimals(allTimeGainAfterTax)}
+                        </div>
+                        <div className="mt-2 text-xs text-gray-400 font-medium tabular-nums">
+                            Før skat {allTimeGain > 0 ? '+' : ''}{formatCurrencyNoDecimals(allTimeGain)}
+                        </div>
+                    </button>
+                </div>
+            </div>
+
+            {/* --- CARDS (tablet/desktop) --- */}
+            <div className="hidden sm:grid sm:grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6">
+                <div onClick={() => toggleModal('taxBreakdown', true)} className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-bank"></i>Værdi</div>
-                    <div className="text-lg sm:mt-2 sm:text-3xl font-bold text-gray-900 tracking-tight text-right sm:text-left">
+                    <div className="mt-2 text-3xl font-bold text-gray-900 tracking-tight">
                         <AnimatedValue value={calc.currentVal - calc.currentTax} formatter={formatCurrencyNoDecimals} />
                     </div>
-                    <div className="col-span-2 sm:col-span-1 text-[11px] sm:text-xs text-gray-400 font-medium sm:mt-1">
+                    <div className="mt-1 text-xs text-gray-400 font-medium">
                         Før skat: <span className="text-gray-600 font-semibold">{formatCurrencyNoDecimals(calc.currentVal)}</span>
                     </div>
                 </div>
-                <div onClick={() => toggleModal('gain', true)} className="bg-white rounded-xl p-4 sm:p-5 border border-gray-200 shadow-sm grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 sm:flex sm:flex-col sm:items-stretch sm:justify-between sm:gap-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+                <div onClick={() => toggleModal('gain', true)} className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-trend-up"></i>Samlet gevinst</div>
-                    <div className={`text-lg sm:mt-2 sm:text-3xl font-bold tracking-tight text-right sm:text-left ${allTimeGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    <div className={`mt-2 text-3xl font-bold tracking-tight ${allTimeGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         <AnimatedValue value={allTimeGainAfterTax} formatter={formatCurrencyNoDecimals} />
                     </div>
-                    <div className="col-span-2 sm:col-span-1 text-[11px] sm:text-xs text-gray-400 font-medium sm:mt-1">
+                    <div className="mt-1 text-xs text-gray-400 font-medium">
                         Før skat: <span className={`font-semibold ${allTimeGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(allTimeGain)}</span>
                     </div>
                 </div>
-                <div onClick={() => toggleModal('movers', true)} className="bg-white rounded-xl p-4 sm:p-5 border border-gray-200 shadow-sm grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-0.5 sm:flex sm:flex-col sm:items-stretch sm:justify-between sm:gap-0 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
+                <div onClick={() => toggleModal('movers', true)} className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm flex flex-col justify-between cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-all group">
                     <div className="text-gray-500 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><i className="ph ph-arrow-up-right"></i>Gevinst/Tab i dag</div>
-                    <div className={`text-lg sm:mt-2 sm:text-3xl font-bold tracking-tight text-right sm:text-left ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
+                    <div className={`mt-2 text-3xl font-bold tracking-tight ${todayStats.activeCount === 0 ? 'text-gray-400' : (todayGainAfterTax >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
                         {todayStats.activeCount > 0 ? (
                             <AnimatedValue 
                                 value={todayGainAfterTax} 
@@ -570,7 +672,7 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                         ) : "0 kr."}
                     </div>
                     {todayStats.activeCount > 0 && (
-                        <div className="col-span-2 sm:col-span-1 text-[11px] sm:text-xs text-gray-400 font-medium sm:mt-1">
+                        <div className="mt-1 text-xs text-gray-400 font-medium">
                             Før skat: <span className={`font-semibold ${todayStats.todayGain >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatCurrencyNoDecimals(todayStats.todayGain)}</span>
                         </div>
                     )}
@@ -682,8 +784,8 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                             </div>
                         </div>
 
-                        {/* Chart area */}
-                        <div className="h-64 sm:h-72 w-full">
+                        {/* Chart area: fills exactly to the bottom of the screen on phones (see mobileChartHeight above) */}
+                        <div ref={chartAreaRef} className="h-64 sm:h-72 w-full" style={mobileChartHeight ? { height: mobileChartHeight } : undefined}>
                             {chartMode === 'yoy' ? (
                                 <YearOverYearChart yoyData={yoyData} selectedYears={yoySelectedYears} years={years} />
                             ) : (
