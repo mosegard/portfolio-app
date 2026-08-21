@@ -5,49 +5,70 @@ import { formatCurrency, formatCurrencyNoDecimals } from '../../utils';
 import useDashboardChartData from '../../hooks/useDashboardChartData';
 import { AllocationModal, LiquidationModal, GainModal, MoversModal, TaxBreakdownModal } from './DashboardModals';
 
-// --- Pill-bar Range Selector ---
+// --- Period Range Selector (dropdown on mobile, pills on desktop) ---
 const RangeSelector = ({ value, onChange, years }) => {
     const ranges = [
         { key: '1M', label: '1M' },
         { key: '3M', label: '3M' },
-        { key: 'YTD', label: 'YTD' },
+        { key: 'YTD', label: 'ÅTD' },
         { key: '1Y', label: '1Å' },
+        { key: '2Y', label: '2Å' },
+        { key: '3Y', label: '3Å' },
         { key: 'ALL', label: 'Max' },
     ];
     const isCustom = value === 'CUSTOM';
     const isYear = !isCustom && !ranges.find(r => r.key === value);
+    const displayLabel = ranges.find(r => r.key === value)?.label || value;
 
     return (
-        <div className="flex items-center gap-1 flex-wrap min-w-0">
-            {isCustom && (
-                <button className="px-2.5 py-1 text-[11px] font-bold rounded-md bg-blue-600 text-white" onClick={() => onChange('ALL')}>
-                    ZOOM ×
-                </button>
-            )}
-            {ranges.map(r => (
-                <button
-                    key={r.key}
-                    className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${value === r.key ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}
-                    onClick={() => onChange(r.key)}
+        <div className="flex items-center gap-1">
+            {/* Mobile dropdown */}
+            <div className="relative sm:hidden">
+                <select
+                    className="appearance-none pl-2 pr-5 py-1 text-[11px] font-bold rounded-md bg-gray-100 text-gray-800 cursor-pointer focus:outline-none border-0"
+                    value={value}
+                    onChange={e => onChange(e.target.value)}
                 >
-                    {r.label}
-                </button>
-            ))}
-            {years.length > 0 && (
-                <div className="relative hidden sm:block">
-                    <select
-                        className={`appearance-none pl-2 pr-5 py-1 text-[11px] font-bold rounded-md border-0 cursor-pointer focus:outline-none ${isYear ? 'bg-gray-800 text-white' : 'bg-transparent text-gray-500 hover:text-gray-800'}`}
-                        value={isYear ? value : ''}
-                        onChange={e => { if (e.target.value) onChange(e.target.value); }}
-                    >
-                        <option value="" disabled>{isYear ? value : 'År'}</option>
-                        {years.map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1">
-                        <i className={`ph ph-caret-down text-[9px] ${isYear ? 'text-white' : 'text-gray-400'}`}></i>
-                    </div>
+                    {ranges.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1">
+                    <i className="ph ph-caret-down text-[9px] text-gray-600"></i>
                 </div>
-            )}
+            </div>
+
+            {/* Desktop pills */}
+            <div className="hidden sm:flex items-center gap-1 flex-wrap">
+                {isCustom && (
+                    <button className="px-2.5 py-1 text-[11px] font-bold rounded-md bg-blue-600 text-white" onClick={() => onChange('ALL')}>
+                        ZOOM ×
+                    </button>
+                )}
+                {ranges.slice(0, 7).map(r => (
+                    <button
+                        key={r.key}
+                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${value === r.key ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}
+                        onClick={() => onChange(r.key)}
+                    >
+                        {r.label}
+                    </button>
+                ))}
+                {years.length > 0 && (
+                    <div className="relative">
+                        <select
+                            className={`appearance-none pl-2 pr-5 py-1 text-[11px] font-bold rounded-md border-0 cursor-pointer focus:outline-none ${isYear ? 'bg-gray-800 text-white' : 'bg-transparent text-gray-500 hover:text-gray-800'}`}
+                            value={isYear ? value : ''}
+                            onChange={e => { if (e.target.value) onChange(e.target.value); }}
+                        >
+                            <option value="" disabled>{isYear ? value : 'År'}</option>
+                            {years.map(y => <option key={y} value={y}>{y}</option>)}
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1">
+                            <i className={`ph ph-caret-down text-[9px] ${isYear ? 'text-white' : 'text-gray-400'}`}></i>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
     );
 };
@@ -781,6 +802,22 @@ const DashboardView = ({ calc, marketData, settings, setSettings, uniqueTickers,
                                         </div>
                                     </div>
                                 )}
+
+                                {/* Chart mode dropdown (phones only) */}
+                                <div className="sm:hidden relative shrink-0 ml-auto">
+                                    <select
+                                        className="appearance-none pl-2 pr-5 py-1 text-[11px] font-bold rounded-md bg-gray-100 text-gray-800 cursor-pointer focus:outline-none border-0"
+                                        value={chartMode}
+                                        onChange={e => setChartMode(e.target.value)}
+                                    >
+                                        <option value="growth">Afkast %</option>
+                                        <option value="value">Værdi kr</option>
+                                        <option value="yoy">År vs År</option>
+                                    </select>
+                                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-1">
+                                        <i className="ph ph-caret-down text-[9px] text-gray-600"></i>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
